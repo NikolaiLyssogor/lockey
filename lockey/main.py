@@ -33,16 +33,19 @@ def execute_ls(args: argparse.Namespace) -> None:
     raise NotImplementedError
 
 
-def router(args: argparse.Namespace) -> None:
-    if args.command == "init":
-        execute_init(args)
-    elif args.command == "ls":
-        execute_ls(args)
-    else:
-        print(f"error: command {args.command} not recognized")
+def execute_add(args: argparse.Namespace) -> None:
+    raise NotImplementedError
 
 
-def main():
+def execute_rm(args: argparse.Namespace) -> None:
+    raise NotImplementedError
+
+
+def execute_destroy(args: argparse.Namespace) -> None:
+    raise NotImplementedError
+
+
+def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lockey",
         description=(
@@ -50,6 +53,7 @@ def main():
         ),
     )
     parser.add_argument(
+        "-v",
         "--version",
         help="print the version and exit",
         action="version",
@@ -68,7 +72,8 @@ def main():
         ),
     )
     parser_init.add_argument(
-        "--dir",
+        "-f",
+        "--file",
         required=False,
         help="the path in which to store passwords",
         default=DEFAULT_DATA_PATH,
@@ -85,6 +90,7 @@ def main():
         ),
     )
     parser_init.add_argument(
+        "-d",
         "--desc",
         required=False,
         type=str,
@@ -92,7 +98,63 @@ def main():
         dest="DESC",
     )
 
-    router(parser.parse_args())
+    # rm subcommand
+    parser_init = subparsers.add_parser(
+        name="rm",
+        help="delete passwords from lockey's vault",
+        description=(
+            "Delete paswords from lockey's vault and their metadata in "
+            "lockeyconfig.json."
+        ),
+    )
+    parser_init.add_argument(
+        "-n",
+        "--name",
+        nargs="+",
+        type=str,
+        required=False,
+        help="the name of the password(s) to delete as displayed in `lockey ls`",
+        dest="NAME",
+        action="extend",
+    )
+
+    # destroy subcommand
+    parser_init = subparsers.add_parser(
+        name="destroy",
+        help="delete all lockey data",
+        description=(
+            "Delete all paswords from lockey's vault and their metadata in "
+            "lockeyconfig.json. Opposite of `lockey init`."
+        ),
+    )
+    parser_init.add_argument(
+        "-y",
+        "--yes",
+        required=False,
+        help="assume yes to prompts and run non-interactively",
+        action="store_const",
+        const=True,
+    )
+
+    return parser
+
+
+def main():
+    parser = get_parser()
+    args = parser.parse_args()
+    print(args)
+    if args.command == "init":
+        execute_init(args)
+    elif args.command == "add":
+        execute_add(args)
+    elif args.command == "ls":
+        execute_ls(args)
+    elif args.command == "rm":
+        execute_rm(args)
+    elif args.command == "destroy":
+        execute_destroy(args)
+    else:
+        print(f"error: command {args.command} not recognized")
 
 
 if __name__ == "__main__":
