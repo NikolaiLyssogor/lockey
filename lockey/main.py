@@ -2,30 +2,57 @@ import argparse
 import importlib.metadata
 import json
 import os
-from typing import AnyStr
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/lockey/config.json")
+CONFIG_PATH = os.path.expanduser("~/.config/lockey/config.json")
 VERSION_FALLBACK = "0.1.0"
 
 
-def get_data_path() -> "str | os.PathLike[AnyStr]":
-    if os.path.exists(DEFAULT_CONFIG_PATH):
-        with open(DEFAULT_CONFIG_PATH) as f:
-            config_file = json.load(f)
-        return config_file.get("data_path", DEFAULT_DATA_PATH)
-    return DEFAULT_DATA_PATH
+ConfigMetadata = dict[str, str]
+SecretMetadata = dict[str, dict[str, str]]
+ConfigSchema = dict[str, ConfigMetadata | SecretMetadata]
 
 
 def get_version() -> str:
-    try:
-        _DISTRIBUTION_METADATA = importlib.metadata.metadata("MyProjectName")
-        return _DISTRIBUTION_METADATA["Version"]
-    except:
-        return VERSION_FALLBACK
+    _DISTRIBUTION_METADATA = importlib.metadata.metadata("lockey")
+    return _DISTRIBUTION_METADATA["Version"]
 
+def get_ansi_red(s: str) -> str:
+    return f"\033[31m{s}\033[0m"
+
+def get_ansi_green(s: str) -> str:
+    return f"\033[32m{s}\033[0m"
 
 def execute_init(args: argparse.Namespace) -> None:
+    # Make sure lockey directories are not already initialized
+    config_head, _ = os.path.split(CONFIG_PATH)
+    if os.path.exists(args.PATH):
+        print(f"{get_ansi_red("error:")} directory {args.PATH} already exists")
+        exit(1)
+    if os.path.exists(config_head):
+        print(f"{get_ansi_red("error:")} directory {config_head} already exists")
+        exit(1)
+
+    # Make sure the directory passed exists
+    headdir, _ = os.path.split(args.PATH)
+    if not os.path.exists(headdir):
+        print(f"{get_ansi_red("error:")} head of supplied path {headdir} does not exist")
+        exit(1)
+
+    # Create ~/.lockey and .config/lockey/config.json
+    config_contents: ConfigSchema = {
+        "config": {"data_path": args.PATH},
+    }
+    os.mkdir(config_head)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config_contents, f)
+    print(f"{get_ansi_green("success:")} initialized config file in {CONFIG_PATH}")
+    os.mkdir(args.PATH)
+    print(f"{get_ansi_green("success:")} initialized secret vault in {args.PATH}")
+    exit(0)
+
+
+def execute_configure(args: argparse.Namespace) -> None:
     raise NotImplementedError
 
 
@@ -34,6 +61,10 @@ def execute_ls(args: argparse.Namespace) -> None:
 
 
 def execute_add(args: argparse.Namespace) -> None:
+    raise NotImplementedError
+
+
+def execute_get(args: argparse.Namespace) -> None:
     raise NotImplementedError
 
 
@@ -155,6 +186,8 @@ def main():
     print(args)
     if args.command == "init":
         execute_init(args)
+    elif args.command == "configure":
+        execute_configure(args)
     elif args.command == "add":
         execute_add(args)
     elif args.command == "ls":
