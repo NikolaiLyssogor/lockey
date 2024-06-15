@@ -80,13 +80,13 @@ def get_parser() -> argparse.ArgumentParser:
         dest="PATH",
     )
 
-    # ls subcommand
+    # add subcommand
     parser_init = subparsers.add_parser(
-        name="ls",
-        help="list the passwords you currently have saved",
+        name="add",
+        help="add a new password to the vault",
         description=(
-            "List all of the passwords saved in lockey's vault along with their "
-            "description if they exist."
+            "Add a new password to the vault. It's description, if supplied, is saved "
+            "in lockeyconfig.json."
         ),
     )
     parser_init.add_argument(
@@ -98,10 +98,20 @@ def get_parser() -> argparse.ArgumentParser:
         dest="DESC",
     )
 
+    # ls subcommand
+    parser_init = subparsers.add_parser(
+        name="ls",
+        help="list the passwords you currently have saved",
+        description=(
+            "List all of the passwords saved in lockey's vault along with their "
+            "description if they exist."
+        ),
+    )
+
     # rm subcommand
     parser_init = subparsers.add_parser(
         name="rm",
-        help="delete passwords from lockey's vault",
+        help="delete a password from the vault",
         description=(
             "Delete paswords from lockey's vault and their metadata in "
             "lockeyconfig.json."
@@ -155,7 +165,3 @@ def main():
         execute_destroy(args)
     else:
         print(f"error: command {args.command} not recognized")
-
-
-if __name__ == "__main__":
-    main()
