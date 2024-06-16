@@ -80,7 +80,7 @@ def test_init_custom_destroy():
     assert not os.path.exists(config_head)
 
 
-def test_abort_destroy_unexpected_config_files():
+def test_destroy_unexpected_config_files():
     parser = lockey.main.get_parser()
     args = parser.parse_args(["init"])
     lockey.main.execute_init(args)
@@ -93,6 +93,43 @@ def test_abort_destroy_unexpected_config_files():
     error_msg = r".* found unexpected file .* in config directory"
     with pytest.raises(SystemExit, match=error_msg):
         lockey.main.execute_destroy(args)
-    
+
     os.remove(extra_filepath)
     lockey.main.execute_destroy(args)
+
+
+def test_destroy_missing_data_path():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    with open(lockey.main.CONFIG_PATH, "rb") as f:
+        config = json.load(f)
+    data_path = config["data_path"]
+    os.rmdir(data_path)
+
+    args = parser.parse_args(["destroy", "-y"])
+    error_msg = r".* secrets directory .* specified in .* not found"
+    with pytest.raises(SystemExit, match=error_msg):
+        lockey.main.execute_destroy(args)
+
+    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
+    os.remove(lockey.main.CONFIG_PATH)
+    os.rmdir(config_head)
+
+
+def test_destroy_missing_config():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    os.remove(lockey.main.CONFIG_PATH)
+
+    args = parser.parse_args(["destroy", "-y"])
+    error_msg = r".* config file .* not found"
+    with pytest.raises(SystemExit, match=error_msg):
+        lockey.main.execute_destroy(args)
+
+    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
+    os.rmdir(config_head)
+    os.rmdir(lockey.main.DEFAULT_DATA_PATH)

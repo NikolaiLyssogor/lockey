@@ -83,8 +83,7 @@ def execute_rm(args: argparse.Namespace) -> None:
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
-    # TODO: Sanity Check: Make sure data dir contains only gpg files
-    # TODO: Make sure config dir only contains the one config file
+    # TODO: Make sure data dir contains only gpg files
     # TODO: Make sure config file names are consistent with gpg filenames
 
     # Make sure config file exists
@@ -103,32 +102,34 @@ def execute_destroy(args: argparse.Namespace) -> None:
                 f"{ERROR} found unexpected file {filename} in config directory"
             )
 
+    # Ensure config data_path is valid path
     data_path = config["data_path"]
     if not isinstance(data_path, str | os.PathLike):
         raise SystemExit(f"{ERROR} config data_path {data_path} not PathLike")
 
-    if os.path.exists(data_path):
-        while True:
-            if args.skip_confirm == True:
-                resp = "y"
-            else:
-                resp = input("Delete all lockey data (y/n)? ")
-            if resp not in ["y", "n"]:
-                continue
-            elif resp == "n":
-                print(f"{NOTE} no data was deleted")
-                return None
-            os.rmdir(data_path)
-            print(f"{SUCCESS} deleted lockey data at {data_path}")
-            config_head, _ = os.path.split(CONFIG_PATH)
-            shutil.rmtree(config_head)
-            print(f"{SUCCESS} deleted lockey config at {data_path}")
-            return None
-    else:
+    # Ensure config data_path exists
+    if not os.path.exists(data_path):
         raise SystemExit(
             f"{ERROR} secrets directory {data_path} specified in "
             f"{CONFIG_PATH} not found"
         )
+
+    while True:
+        if args.skip_confirm == True:
+            resp = "y"
+        else:
+            resp = input("Delete all lockey data (y/n)? ")
+        if resp not in ["y", "n"]:
+            continue
+        elif resp == "n":
+            print(f"{NOTE} no data was deleted")
+            return None
+        os.rmdir(data_path)
+        print(f"{SUCCESS} deleted lockey data at {data_path}")
+        config_head, _ = os.path.split(CONFIG_PATH)
+        shutil.rmtree(config_head)
+        print(f"{SUCCESS} deleted lockey config at {data_path}")
+        return None
 
 
 def get_parser() -> argparse.ArgumentParser:
