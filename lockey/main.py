@@ -21,40 +21,45 @@ def get_version() -> str:
     _DISTRIBUTION_METADATA = importlib.metadata.metadata("lockey")
     return _DISTRIBUTION_METADATA["Version"]
 
+
 def get_ansi_red(s: str) -> str:
     return f"\033[31m{s}\033[0m"
+
 
 def get_ansi_green(s: str) -> str:
     return f"\033[32m{s}\033[0m"
 
+
 def get_ansi_yellow(s: str) -> str:
     return f"\033[33m{s}\033[0m"
+
 
 def execute_init(args: argparse.Namespace) -> None:
     # Make sure lockey directories are not already initialized
     config_head, _ = os.path.split(CONFIG_PATH)
-    if os.path.exists(args.PATH):
-        print(f"{ERROR} directory {args.PATH} already exists")
-        exit(1)
+    if args.PATH != DEFAULT_DATA_PATH:
+        data_path = os.path.join(args.PATH, ".lockey")
+    else:
+        data_path = DEFAULT_DATA_PATH
+
+    if os.path.exists(data_path):
+        raise SystemExit(f"{ERROR} directory {data_path} already exists")
     if os.path.exists(config_head):
-        print(f"{ERROR} directory {config_head} already exists")
-        exit(1)
+        raise SystemExit(f"{ERROR} directory {config_head} already exists")
 
     # Make sure the directory passed exists
-    headdir, _ = os.path.split(args.PATH)
-    if not os.path.exists(headdir):
-        print(f"{ERROR} head of supplied path {headdir} does not exist")
-        exit(1)
+    data_head, _ = os.path.split(data_path)
+    if not os.path.exists(data_head):
+        raise SystemExit(f"{ERROR} head of supplied path {data_head} does not exist")
 
     # Create ~/.lockey and .config/lockey/config.json
-    config: ConfigSchema = {"data_path": args.PATH}
+    config: ConfigSchema = {"data_path": data_path}
     os.mkdir(config_head)
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f)
     print(f"{SUCCESS} initialized config file in {CONFIG_PATH}")
-    os.mkdir(args.PATH)
-    print(f"{SUCCESS} initialized secret vault in {args.PATH}")
-    exit(0)
+    os.mkdir(data_path)
+    print(f"{SUCCESS} initialized secret vault in {data_path}")
 
 
 def execute_configure(args: argparse.Namespace) -> None:
@@ -78,22 +83,15 @@ def execute_rm(args: argparse.Namespace) -> None:
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
-    # Look for the config.json
-       # If it's not found, throw an error
-       # If it was found, save the data path
-    # If data path wasn't found, abort
-    # If it was, delete the data path and config directory
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r") as f:
             config: ConfigSchema = json.load(f)
     else:
-        print(f"{ERROR} config file {CONFIG_PATH} not found")
-        exit(1)
+        raise SystemExit(f"{ERROR} config file {CONFIG_PATH} not found")
 
     data_path = config["data_path"]
     if not isinstance(data_path, str | os.PathLike):
-        print(f"{ERROR} config data_path {data_path} not PathLike")
-        exit(1)
+        raise SystemExit(f"{ERROR} config data_path {data_path} not PathLike")
 
     if os.path.exists(data_path):
         while True:
@@ -105,19 +103,18 @@ def execute_destroy(args: argparse.Namespace) -> None:
                 continue
             elif resp == "n":
                 print(f"{NOTE} no data was deleted")
-                exit(0)
+                return None
             os.rmdir(data_path)
             print(f"{SUCCESS} deleted lockey data at {data_path}")
             config_head, _ = os.path.split(CONFIG_PATH)
             shutil.rmtree(config_head)
             print(f"{SUCCESS} deleted lockey config at {data_path}")
-            exit(0)
+            return None
     else:
-        print(
+        raise SystemExit(
             f"{ERROR} secrets directory {data_path} specified in "
             f"{CONFIG_PATH} not found"
         )
-        exit(1)
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -219,7 +216,7 @@ def get_parser() -> argparse.ArgumentParser:
         help="assume yes to prompts and run non-interactively",
         action="store_const",
         const=True,
-        dest="skip_confirm"
+        dest="skip_confirm",
     )
 
     return parser
