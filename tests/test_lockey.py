@@ -22,8 +22,8 @@ def test_init_args():
 def test_destroy_args():
     parser = lockey.main.get_parser()
     args = parser.parse_args(["destroy"])
-    assert not args.yes
+    assert not args.skip_confirm
     args = parser.parse_args(["destroy", "-y"])
-    assert args.yes == True
+    assert args.skip_confirm == True
     args = parser.parse_args(["destroy", "--yes"])
-    assert args.yes == True
+    assert args.skip_confirm == True
