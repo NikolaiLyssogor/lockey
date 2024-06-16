@@ -83,11 +83,25 @@ def execute_rm(args: argparse.Namespace) -> None:
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
+    # TODO: Sanity Check: Make sure data dir contains only gpg files
+    # TODO: Make sure config dir only contains the one config file
+    # TODO: Make sure config file names are consistent with gpg filenames
+
+    # Make sure config file exists
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r") as f:
             config: ConfigSchema = json.load(f)
     else:
         raise SystemExit(f"{ERROR} config file {CONFIG_PATH} not found")
+
+    # Make sure config dir only contains the one config file
+    config_head, _ = os.path.split(CONFIG_PATH)
+    for filename in os.listdir(config_head):
+        filepath = os.path.join(config_head, filename)
+        if filepath != CONFIG_PATH:
+            raise SystemExit(
+                f"{ERROR} found unexpected file {filename} in config directory"
+            )
 
     data_path = config["data_path"]
     if not isinstance(data_path, str | os.PathLike):
@@ -225,7 +239,6 @@ def get_parser() -> argparse.ArgumentParser:
 def main():
     parser = get_parser()
     args = parser.parse_args()
-    print(args)
     if args.command == "init":
         execute_init(args)
     elif args.command == "configure":
@@ -239,4 +252,4 @@ def main():
     elif args.command == "destroy":
         execute_destroy(args)
     else:
-        print(f"error: command {args.command} not recognized")
+        raise SystemExit(f"{ERROR} command {args.command} not recognized")

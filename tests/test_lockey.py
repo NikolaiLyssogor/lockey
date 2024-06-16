@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 import lockey.main
 
 # TODO: Add warning with manual confirmation that these tests will override
@@ -76,3 +78,21 @@ def test_init_custom_destroy():
     assert not os.path.exists(data_path_spec)
     config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
     assert not os.path.exists(config_head)
+
+
+def test_abort_destroy_unexpected_config_files():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
+    extra_filepath = os.path.join(config_head, "extra.txt")
+    open(extra_filepath, "a").close()
+    args = parser.parse_args(["destroy", "-y"])
+
+    error_msg = r".* found unexpected file .* in config directory"
+    with pytest.raises(SystemExit, match=error_msg):
+        lockey.main.execute_destroy(args)
+    
+    os.remove(extra_filepath)
+    lockey.main.execute_destroy(args)
