@@ -9,8 +9,6 @@ import lockey.main
 # data in default lockey locations. It would be easier to maybe only run these
 # using github actions?
 
-COMMANDS = ["init", "add", "ls", "rm", "destroy"]
-
 
 def test_init_args():
     path = os.path.expanduser("~/Documents/.lockey/")
@@ -129,3 +127,19 @@ def test_destroy_missing_config():
 
     os.rmdir(lockey.main.CONFIG_PATH)
     os.rmdir(lockey.main.DEFAULT_DATA_PATH)
+
+def test_context_manager_basic():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    old_filepath = lockey.main.get_config_metadata("filepath")
+    old_hash = lockey.main.get_hash(old_filepath)
+    with lockey.main.get_verified_config() as config:
+        config["key"] = "value"
+    new_filepath = lockey.main.get_config_metadata("filepath")
+    new_hash = lockey.main.get_hash(new_filepath)
+
+    assert old_hash != new_hash
+    
+# TODO: Write more tests for this

@@ -4,8 +4,16 @@ import importlib.metadata
 import json
 import os
 import shutil
+import subprocess
+import sys
+import typing
 from contextlib import contextmanager
-from typing import Literal
+from typing import Iterator, Literal, Tuple
+
+# TODO: verify cli's files all are in correct place
+# in a uniform way for commands add, get, destroy, ls, rm
+CommandType = Literal["init", "add", "ls", "get", "configure", "rm", "destroy"]
+COMMANDS: Tuple[CommandType, ...] = typing.get_args(CommandType)
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
 CONFIG_PATH = os.path.expanduser("~/.config/lockey/")
@@ -20,6 +28,12 @@ BUFSIZE = 65536
 
 SecretMetadata = dict[str, dict[str, str]]
 ConfigSchema = dict[str, str | SecretMetadata]
+
+
+class ChecksumVerificationError(Exception):
+    def __init__(self, message: str = "Checksum could not be verified"):
+        self.message = message
+        super().__init__(self.message)
 
 
 def get_version() -> str:
@@ -37,6 +51,39 @@ def get_ansi_green(s: str) -> str:
 
 def get_ansi_yellow(s: str) -> str:
     return f"\033[33m{s}\033[0m"
+
+
+def command_requires_gpg(command: CommandType) -> bool:
+    if command not in COMMANDS:
+        raise ValueError(f"Invalid command {command}")
+    if command in ["add", "get"]:
+        return True
+    else:
+        return False
+
+
+def is_gpg_installed(display_type: Literal["warning", "error"]):
+    try:
+        result = subprocess.run(
+            ["gpg", "--version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode == 0:
+            return
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    msg = (
+        "{} gpg is not installed on this system and is a required dependency "
+        "for lockey"
+    )
+    # TODO: use python's warnings library
+    if display_type == "warning":
+        print(msg.format(WARNING))
+    elif display_type == "error":
+        raise SystemExit(msg.format(ERROR))
 
 
 def is_sha256_hash(s: str) -> bool:
@@ -96,14 +143,42 @@ def get_hash(filepath: str) -> str:
     return sha256.hexdigest()
 
 
-# def __enter__(self) -> ConfigSchema:
-#     if len(os.listdir(CONFIG_PATH)) != 1:
-#         raise SystemExit(
-#             f"{ERROR} multiple files found in config directory {CONFIG_PATH}"
-#         )
-#
-#     config_filename = os.listdir(CONFIG_PATH)[0]
-#     config_filepath = os.path.join(CONFIG_PATH, config_filename)
+def get_config() -> ConfigSchema:
+    config_filepath = get_config_metadata("filepath")
+    old_hash = get_config_metadata("filename")
+    cur_hash = get_hash(config_filepath)
+
+    if old_hash != cur_hash:
+        # TODO: Make sure the context manager doesn't recompute the hash
+        raise ChecksumVerificationError
+    else:
+        with open(config_filepath, "rb") as f:
+            config = json.load(f)
+        return config
+
+
+@contextmanager
+def get_verified_config() -> Iterator[ConfigSchema]:
+    config = get_config()
+    checksum_is_valid = True
+    try:
+        # New config written here
+        yield config
+    except ChecksumVerificationError:
+        checksum_is_valid = False
+        raise
+    finally:
+        if checksum_is_valid:
+            with open(get_config_metadata("filepath"), "w") as f:
+                json.dump(config, f, indent=2)
+
+            # Recompute hash and save as filename
+            config_filepath = get_config_metadata("filepath")
+            new_config_hash = get_hash(config_filepath)
+            new_config_filename = os.path.join(CONFIG_PATH, new_config_hash)
+            os.rename(config_filepath, new_config_filename)
+        else:
+            raise SystemExit(f"{ERROR} checksum verification failed")
 
 
 def execute_init(args: argparse.Namespace) -> None:
@@ -124,7 +199,7 @@ def execute_init(args: argparse.Namespace) -> None:
         raise SystemExit(f"{ERROR} head of supplied path {data_head} does not exist")
 
     # Create ~/.lockey and .config/lockey/config.json
-    config: ConfigSchema = {"data_path": data_path}
+    config: ConfigSchema = {"data_path": data_path, "secrets": {}}
     os.mkdir(CONFIG_PATH)
     temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
     with open(temp_config_filepath, "w") as f:
@@ -299,6 +374,12 @@ def get_parser() -> argparse.ArgumentParser:
 def main():
     parser = get_parser()
     args = parser.parse_args()
+    if command_requires_gpg(args.command):
+        display_type = "error"
+    else:
+        display_type = "warning"
+    is_gpg_installed(display_type)
+
     if args.command == "init":
         execute_init(args)
     elif args.command == "configure":
