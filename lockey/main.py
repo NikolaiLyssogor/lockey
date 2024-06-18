@@ -1,17 +1,22 @@
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
 import shutil
+from contextlib import contextmanager
+from typing import Literal
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
-CONFIG_PATH = os.path.expanduser("~/.config/lockey/config.json")
+CONFIG_PATH = os.path.expanduser("~/.config/lockey/")
 VERSION_FALLBACK = "0.1.0"
 
 SUCCESS = "\033[32msuccess:\033[0m"
 WARNING = "\033[33mwarning:\033[0m"
 ERROR = "\033[31merror:\033[0m"
 NOTE = "\033[36mnote:\033[0m"
+
+BUFSIZE = 65536
 
 SecretMetadata = dict[str, dict[str, str]]
 ConfigSchema = dict[str, str | SecretMetadata]
@@ -34,9 +39,75 @@ def get_ansi_yellow(s: str) -> str:
     return f"\033[33m{s}\033[0m"
 
 
+def is_sha256_hash(s: str) -> bool:
+    if len(s) != 64:
+        return False
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def get_config_metadata(info_type: Literal["filepath", "filename"]) -> str:
+    # TODO: test
+    if not os.path.exists(CONFIG_PATH):
+        raise SystemExit(f"{ERROR} config directory {CONFIG_PATH} not found")
+
+    config_dir_files = os.listdir(CONFIG_PATH)
+    if len(config_dir_files) > 1:
+        raise SystemExit(f"{ERROR} unexpected config directory contents")
+    elif len(config_dir_files) == 0:
+        raise SystemExit(f"{ERROR} config directory is empty")
+
+    config_filename = config_dir_files[0]
+    if not is_sha256_hash(config_filename):
+        raise SystemExit(
+            f"{ERROR} config file name {config_filename} is invalid sha256 hash"
+        )
+
+    config_filepath = os.path.join(CONFIG_PATH, config_filename)
+    try:
+        with open(config_filepath, "rb") as f:
+            _ = json.load(f)
+    except json.decoder.JSONDecodeError:
+        raise SystemExit(f"{ERROR} config file {config_filepath} not valid json")
+
+    if info_type == "filepath":
+        return config_filepath
+    elif info_type == "filename":
+        return config_filename
+    else:
+        raise ValueError(f"Invalid argument {info_type}")
+
+
+def get_hash(filepath: str) -> str:
+    if not os.path.isfile(filepath):
+        raise SystemExit(f"{ERROR} file path to be hashed {filepath} is not file")
+
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while True:
+            data = f.read(BUFSIZE)
+            if not data:
+                break
+            sha256.update(data)
+
+    return sha256.hexdigest()
+
+
+# def __enter__(self) -> ConfigSchema:
+#     if len(os.listdir(CONFIG_PATH)) != 1:
+#         raise SystemExit(
+#             f"{ERROR} multiple files found in config directory {CONFIG_PATH}"
+#         )
+#
+#     config_filename = os.listdir(CONFIG_PATH)[0]
+#     config_filepath = os.path.join(CONFIG_PATH, config_filename)
+
+
 def execute_init(args: argparse.Namespace) -> None:
     # Make sure lockey directories are not already initialized
-    config_head, _ = os.path.split(CONFIG_PATH)
     if args.PATH != DEFAULT_DATA_PATH:
         data_path = os.path.join(args.PATH, ".lockey")
     else:
@@ -44,8 +115,8 @@ def execute_init(args: argparse.Namespace) -> None:
 
     if os.path.exists(data_path):
         raise SystemExit(f"{ERROR} directory {data_path} already exists")
-    if os.path.exists(config_head):
-        raise SystemExit(f"{ERROR} directory {config_head} already exists")
+    if os.path.exists(CONFIG_PATH):
+        raise SystemExit(f"{ERROR} directory {CONFIG_PATH} already exists")
 
     # Make sure the directory passed exists
     data_head, _ = os.path.split(data_path)
@@ -54,10 +125,15 @@ def execute_init(args: argparse.Namespace) -> None:
 
     # Create ~/.lockey and .config/lockey/config.json
     config: ConfigSchema = {"data_path": data_path}
-    os.mkdir(config_head)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f)
+    os.mkdir(CONFIG_PATH)
+    temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
+    with open(temp_config_filepath, "w") as f:
+        json.dump(config, f, indent=2)
+    config_hash = get_hash(temp_config_filepath)
+    config_filepath = os.path.join(CONFIG_PATH, config_hash)
+    os.rename(temp_config_filepath, config_filepath)
     print(f"{SUCCESS} initialized config file in {CONFIG_PATH}")
+
     os.mkdir(data_path)
     print(f"{SUCCESS} initialized secret vault in {data_path}")
 
@@ -86,29 +162,13 @@ def execute_destroy(args: argparse.Namespace) -> None:
     # TODO: Make sure data dir contains only gpg files
     # TODO: Make sure config file names are consistent with gpg filenames
 
-    # Make sure config file exists
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r") as f:
-            config: ConfigSchema = json.load(f)
-    else:
-        raise SystemExit(f"{ERROR} config file {CONFIG_PATH} not found")
+    config_filepath = get_config_metadata("filepath")
+    with open(config_filepath, "r") as f:
+        config: ConfigSchema = json.load(f)
 
-    # Make sure config dir only contains the one config file
-    config_head, _ = os.path.split(CONFIG_PATH)
-    for filename in os.listdir(config_head):
-        filepath = os.path.join(config_head, filename)
-        if filepath != CONFIG_PATH:
-            raise SystemExit(
-                f"{ERROR} found unexpected file {filename} in config directory"
-            )
-
-    # Ensure config data_path is valid path
+    # Ensure config data_path is valid
     data_path = config["data_path"]
-    if not isinstance(data_path, str | os.PathLike):
-        raise SystemExit(f"{ERROR} config data_path {data_path} not PathLike")
-
-    # Ensure config data_path exists
-    if not os.path.exists(data_path):
+    if not isinstance(data_path, str | os.PathLike) or not os.path.exists(data_path):
         raise SystemExit(
             f"{ERROR} secrets directory {data_path} specified in "
             f"{CONFIG_PATH} not found"
@@ -126,8 +186,7 @@ def execute_destroy(args: argparse.Namespace) -> None:
             return None
         os.rmdir(data_path)
         print(f"{SUCCESS} deleted lockey data at {data_path}")
-        config_head, _ = os.path.split(CONFIG_PATH)
-        shutil.rmtree(config_head)
+        shutil.rmtree(CONFIG_PATH)
         print(f"{SUCCESS} deleted lockey config at {data_path}")
         return None
 

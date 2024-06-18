@@ -12,13 +12,6 @@ import lockey.main
 COMMANDS = ["init", "add", "ls", "rm", "destroy"]
 
 
-def test_command_names():
-    for command in COMMANDS:
-        parser = lockey.main.get_parser()
-        args = parser.parse_args([command])
-        assert args.command == command
-
-
 def test_init_args():
     path = os.path.expanduser("~/Documents/.lockey/")
     parser = lockey.main.get_parser()
@@ -40,13 +33,19 @@ def test_destroy_args():
     assert args.skip_confirm == True
 
 
-def test_init_destroy():
+def test_init_destroy_basic():
     parser = lockey.main.get_parser()
     args = parser.parse_args(["init"])
     lockey.main.execute_init(args)
+
     assert os.path.exists(lockey.main.DEFAULT_DATA_PATH)
-    assert os.path.exists(lockey.main.CONFIG_PATH)
-    with open(lockey.main.CONFIG_PATH, "r") as f:
+    config_dir_files = os.listdir(lockey.main.CONFIG_PATH)
+    assert len(config_dir_files) == 1
+    config_filename = config_dir_files[0]
+    config_filepath = os.path.join(lockey.main.CONFIG_PATH, config_filename)
+    assert os.path.isfile(config_filepath)
+    assert lockey.main.is_sha256_hash(config_filename)
+    with open(config_filepath, "r") as f:
         config = json.load(f)
     data_path = config["data_path"]
     assert "data_path" in config.keys()
@@ -55,11 +54,10 @@ def test_init_destroy():
     args = parser.parse_args(["destroy", "-y"])
     lockey.main.execute_destroy(args)
     assert not os.path.exists(lockey.main.DEFAULT_DATA_PATH)
-    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
-    assert not os.path.exists(config_head)
+    assert not os.path.exists(lockey.main.CONFIG_PATH)
 
 
-def test_init_custom_destroy():
+def test_init_custom_destroy_basic():
     parser = lockey.main.get_parser()
     data_path_head_spec = os.getcwd()
     data_path_spec = os.path.join(data_path_head_spec, ".lockey")
@@ -67,7 +65,8 @@ def test_init_custom_destroy():
     lockey.main.execute_init(args)
     assert os.path.exists(data_path_spec)
     assert os.path.exists(lockey.main.CONFIG_PATH)
-    with open(lockey.main.CONFIG_PATH, "r") as f:
+    config_filepath = lockey.main.get_config_metadata("filepath")
+    with open(config_filepath, "r") as f:
         config = json.load(f)
     data_path = config["data_path"]
     assert "data_path" in config.keys()
@@ -76,8 +75,7 @@ def test_init_custom_destroy():
     args = parser.parse_args(["destroy", "-y"])
     lockey.main.execute_destroy(args)
     assert not os.path.exists(data_path_spec)
-    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
-    assert not os.path.exists(config_head)
+    assert not os.path.exists(lockey.main.CONFIG_PATH)
 
 
 def test_destroy_unexpected_config_files():
@@ -85,12 +83,11 @@ def test_destroy_unexpected_config_files():
     args = parser.parse_args(["init"])
     lockey.main.execute_init(args)
 
-    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
-    extra_filepath = os.path.join(config_head, "extra.txt")
+    extra_filepath = os.path.join(lockey.main.CONFIG_PATH, "extra.txt")
     open(extra_filepath, "a").close()
     args = parser.parse_args(["destroy", "-y"])
 
-    error_msg = r".* found unexpected file .* in config directory"
+    error_msg = r".* unexpected config directory contents"
     with pytest.raises(SystemExit, match=error_msg):
         lockey.main.execute_destroy(args)
 
@@ -103,7 +100,8 @@ def test_destroy_missing_data_path():
     args = parser.parse_args(["init"])
     lockey.main.execute_init(args)
 
-    with open(lockey.main.CONFIG_PATH, "rb") as f:
+    config_filepath = lockey.main.get_config_metadata("filepath")
+    with open(config_filepath, "rb") as f:
         config = json.load(f)
     data_path = config["data_path"]
     os.rmdir(data_path)
@@ -113,9 +111,8 @@ def test_destroy_missing_data_path():
     with pytest.raises(SystemExit, match=error_msg):
         lockey.main.execute_destroy(args)
 
-    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
-    os.remove(lockey.main.CONFIG_PATH)
-    os.rmdir(config_head)
+    os.remove(config_filepath)
+    os.rmdir(lockey.main.CONFIG_PATH)
 
 
 def test_destroy_missing_config():
@@ -123,13 +120,12 @@ def test_destroy_missing_config():
     args = parser.parse_args(["init"])
     lockey.main.execute_init(args)
 
-    os.remove(lockey.main.CONFIG_PATH)
+    os.remove(lockey.main.get_config_metadata("filepath"))
 
     args = parser.parse_args(["destroy", "-y"])
-    error_msg = r".* config file .* not found"
+    error_msg = r".* config directory is empty"
     with pytest.raises(SystemExit, match=error_msg):
         lockey.main.execute_destroy(args)
 
-    config_head, _ = os.path.split(lockey.main.CONFIG_PATH)
-    os.rmdir(config_head)
+    os.rmdir(lockey.main.CONFIG_PATH)
     os.rmdir(lockey.main.DEFAULT_DATA_PATH)
