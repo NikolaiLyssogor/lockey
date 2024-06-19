@@ -180,7 +180,7 @@ def get_verified_config() -> Iterator[ConfigSchema]:
             os.rename(config_filepath, new_config_filename)
 
 
-def get_secret_filepath_by_name(name: str) -> str | None:
+def get_secret_filepath_by_name(name: str) -> str | os.PathLike[Any] | None:
     with get_verified_config() as config:
         data_path = config["data_path"]
 
@@ -265,6 +265,7 @@ def encrypt_secret(
             error_msg = stderr.decode().strip()
             raise SystemExit(f"{ERROR} unable to encrypt secret: {error_msg}")
         else:
+            os.chmod(output_filepath, 0o600)
             return output_filepath
     except Exception as e:
         raise SystemExit(
@@ -310,8 +311,51 @@ def execute_add(args: argparse.Namespace) -> None:
     print(f"{SUCCESS} secret encrypted in {output_filepath}")
 
 
+def decrypt_secret(secret_filepath: str | os.PathLike[Any], passphrase: str) -> str:
+    try:
+        command = [
+            "gpg",
+            "--batch",
+            "--yes",
+            "--no-symkey-cache",
+            "--passphrase-fd",
+            "0",
+            "--decrypt",
+            secret_filepath,
+        ]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        stdout, _ = process.communicate(passphrase.encode())
+        if process.returncode != 0:
+            raise SystemExit(f"{ERROR} gpg returned a non-zero status code")
+        secret = stdout.decode().strip()
+        return secret
+    except Exception as e:
+        raise SystemExit(
+            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
+        )
+
+
+def send_secret_to_clipboard(secret: str) -> None:
+    process = subprocess.Popen(
+        "pbcopy", env={"LANG": "en_US.UTF-8"}, stdin=subprocess.PIPE
+    )
+    process.communicate(secret.encode("utf-8"))
+
+
 def execute_get(args: argparse.Namespace) -> None:
-    raise NotImplementedError
+    secret_filepath = get_secret_filepath_by_name(args.NAME)
+    if secret_filepath is None:
+        raise SystemExit(f"{ERROR} secret {args.NAME} not found")
+
+    passphrase = getpass.getpass("passphrase: ")
+    secret = decrypt_secret(secret_filepath, passphrase)
+    send_secret_to_clipboard(secret)
+    print(f"{SUCCESS} secret {args.NAME} copied to clipboard")
 
 
 def execute_rm(args: argparse.Namespace) -> None:
@@ -412,6 +456,21 @@ def get_parser() -> argparse.ArgumentParser:
         dest="MSG",
     )
 
+    # get subcommand
+    parser_init = subparsers.add_parser(
+        name="get",
+        help="decrypt a secret",
+        description=("Get a secret from the vault and copy it to your clipboard."),
+    )
+    parser_init.add_argument(
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="the name used to encrypt the secret with `lockey add`",
+        dest="NAME",
+    )
+
     # ls subcommand
     parser_init = subparsers.add_parser(
         name="ls",
@@ -479,6 +538,8 @@ def main():
         execute_configure(args)
     elif args.command == "add":
         execute_add(args)
+    elif args.command == "get":
+        execute_get(args)
     elif args.command == "ls":
         execute_ls(args)
     elif args.command == "rm":
@@ -487,13 +548,3 @@ def main():
         execute_destroy(args)
     else:
         raise SystemExit(f"{ERROR} command {args.command} not recognized")
-
-
-if __name__ == "__main__":
-    gpg = gnupg.GPG()
-    encrypted_data = gpg.encrypt(
-        data="supersecretdata",
-        symmetric="AES256",
-        passphrase="password",
-        output="test.gpg",
-    )

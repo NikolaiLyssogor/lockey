@@ -194,3 +194,9 @@ def test_add_duplicate_name_config():
 
 def test_add_duplicate_name_data():
     assert True
+
+def test_add_encryption_basic():
+    assert True
+
+def test_decrypt_basic():
+    assert True
