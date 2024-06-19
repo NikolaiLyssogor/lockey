@@ -13,7 +13,7 @@ from typing import Any, Iterator, Literal, Tuple
 
 # TODO: verify cli's files all are in correct place
 # in a uniform way for commands add, get, destroy, ls, rm
-CommandType = Literal["init", "add", "ls", "get", "configure", "rm", "destroy"]
+CommandType = Literal["init", "add", "ls", "get", "rm", "destroy"]
 COMMANDS: Tuple[CommandType, ...] = typing.get_args(CommandType)
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
@@ -230,12 +230,48 @@ def execute_init(args: argparse.Namespace) -> None:
     print(f"{SUCCESS} initialized secret vault in {data_path}")
 
 
-def execute_configure(args: argparse.Namespace) -> None:
-    raise NotImplementedError
-
-
 def execute_ls(args: argparse.Namespace) -> None:
-    raise NotImplementedError
+    with get_verified_config() as config:
+        secrets = config["secrets"]
+    if not secrets:
+        print("no secrets stored")
+        return None
+
+    # If name is longer than first line of message will be on different line
+    longest_name = max(len(k) for k in secrets)
+    max_name_len = min(30, longest_name)
+    # Max length of each line of messages
+    max_message_len = 40
+    gap = " " * (max_name_len + 5)
+
+    for name, secret_data in secrets.items():
+        message = secret_data["message"]
+        if message is None:
+            print(name)
+            continue
+
+        message_lines = [""]
+        message_split = message.split(" ")
+        for word in message_split:
+            if len(message_lines[-1]) + len(word) + 1 > max_message_len:
+                message_lines.append(word + " ")
+                continue
+            message_lines[-1] = message_lines[-1] + word + " "
+
+        message_lines = [line.strip() for line in message_lines]
+        # First line may or may not have part of the description on it
+        if len(name) > max_name_len:
+            first_line = name
+        else:
+            first_line_gap = gap[len(name):]
+            first_line = name + first_line_gap + message_lines[0]
+
+        print(first_line)
+        if len(name) > max_name_len:
+            print(gap + message_lines[0])
+        if len(message_lines) > 1:
+            for line in message_lines[1:]:
+                print(gap + line)
 
 
 def encrypt_secret(
@@ -534,8 +570,6 @@ def main():
 
     if args.command == "init":
         execute_init(args)
-    elif args.command == "configure":
-        execute_configure(args)
     elif args.command == "add":
         execute_add(args)
     elif args.command == "get":
