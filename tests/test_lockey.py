@@ -1,5 +1,7 @@
+import copy
 import json
 import os
+import shutil
 
 import pytest
 
@@ -128,6 +130,7 @@ def test_destroy_missing_config():
     os.rmdir(lockey.main.CONFIG_PATH)
     os.rmdir(lockey.main.DEFAULT_DATA_PATH)
 
+
 def test_context_manager_basic():
     parser = lockey.main.get_parser()
     args = parser.parse_args(["init"])
@@ -139,7 +142,55 @@ def test_context_manager_basic():
         config["key"] = "value"
     new_filepath = lockey.main.get_config_metadata("filepath")
     new_hash = lockey.main.get_hash(new_filepath)
-
     assert old_hash != new_hash
-    
-# TODO: Write more tests for this
+
+    shutil.rmtree(lockey.main.CONFIG_PATH)
+    os.rmdir(lockey.main.DEFAULT_DATA_PATH)
+
+
+def test_context_manager_checksum_fail():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    config_filepath = lockey.main.get_config_metadata("filepath")
+    with open(config_filepath, "rb") as f:
+        config = json.load(f)
+    config["foo"] = "bar"
+    with open(config_filepath, "w") as f:
+        json.dump(config, f, indent=2)
+
+    with pytest.raises(lockey.main.ChecksumVerificationError):
+        with lockey.main.get_verified_config() as config:
+            pass
+    # Make sure checksum is not recomputed on error
+    assert os.path.exists(config_filepath)
+
+    shutil.rmtree(lockey.main.CONFIG_PATH)
+    os.rmdir(lockey.main.DEFAULT_DATA_PATH)
+
+
+def test_add_invalid_name():
+    parser = lockey.main.get_parser()
+    args = parser.parse_args(["init"])
+    lockey.main.execute_init(args)
+
+    bad_names = ["!@#$%#$^$^&&^%*", "]][[[][ []342^%$]]", "~`fjdkfwi8$@# 4#@$32", "a b"]
+    for name in bad_names:
+        args = parser.parse_args(["add", "-n", name])
+        error_msg = (
+            r".* names must only consists of alphanumeric characters, hyphens, .*"
+        )
+        with pytest.raises(SystemExit, match=error_msg):
+            lockey.main.execute_add(args)
+
+    shutil.rmtree(lockey.main.CONFIG_PATH)
+    shutil.rmtree(lockey.main.DEFAULT_DATA_PATH)
+
+
+def test_add_duplicate_name_config():
+    assert True
+
+
+def test_add_duplicate_name_data():
+    assert True

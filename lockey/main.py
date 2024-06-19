@@ -1,14 +1,15 @@
 import argparse
+import getpass
 import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
-import sys
 import typing
 from contextlib import contextmanager
-from typing import Iterator, Literal, Tuple
+from typing import Any, Iterator, Literal, Tuple
 
 # TODO: verify cli's files all are in correct place
 # in a uniform way for commands add, get, destroy, ls, rm
@@ -177,11 +178,26 @@ def get_verified_config() -> Iterator[ConfigSchema]:
             new_config_hash = get_hash(config_filepath)
             new_config_filename = os.path.join(CONFIG_PATH, new_config_hash)
             os.rename(config_filepath, new_config_filename)
-        else:
-            raise SystemExit(f"{ERROR} checksum verification failed")
+
+
+def get_secret_filepath_by_name(name: str) -> str | None:
+    with get_verified_config() as config:
+        data_path = config["data_path"]
+
+    if not isinstance(data_path, str | os.PathLike) or not os.path.exists(data_path):
+        raise SystemExit(f"{ERROR} data path in config file does not exist")
+
+    for filename in os.listdir(data_path):
+        basename, _ = os.path.splitext(filename)
+        if basename == name:
+            return os.path.join(data_path, filename)
+
+    return None
 
 
 def execute_init(args: argparse.Namespace) -> None:
+    # TODO: Set default timeout?
+    # https://unix.stackexchange.com/questions/395875/gpg-does-not-ask-for-password
     # Make sure lockey directories are not already initialized
     if args.PATH != DEFAULT_DATA_PATH:
         data_path = os.path.join(args.PATH, ".lockey")
@@ -204,6 +220,7 @@ def execute_init(args: argparse.Namespace) -> None:
     temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
     with open(temp_config_filepath, "w") as f:
         json.dump(config, f, indent=2)
+    os.chmod(temp_config_filepath, 0o600)
     config_hash = get_hash(temp_config_filepath)
     config_filepath = os.path.join(CONFIG_PATH, config_hash)
     os.rename(temp_config_filepath, config_filepath)
@@ -221,8 +238,76 @@ def execute_ls(args: argparse.Namespace) -> None:
     raise NotImplementedError
 
 
+def encrypt_secret(
+    secret: str, passphrase: str, data_path: str | os.PathLike[Any], name: str
+) -> str | os.PathLike[Any]:
+    output_filepath = os.path.join(data_path, name + ".gpg")
+    try:
+        command = [
+            "gpg",
+            "--output",
+            output_filepath,
+            "--passphrase",
+            passphrase,
+            "--cipher-algo",
+            "AES256",
+            "--batch",
+            "--yes",
+            "--armour",
+            "--no-symkey-cache",
+            "--symmetric",
+        ]
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        _, stderr = process.communicate(secret.encode())
+        if process.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise SystemExit(f"{ERROR} unable to encrypt secret: {error_msg}")
+        else:
+            return output_filepath
+    except Exception as e:
+        raise SystemExit(
+            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
+        )
+
+
 def execute_add(args: argparse.Namespace) -> None:
-    raise NotImplementedError
+    # Make sure name is valid
+    pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+    if not bool(pattern.match(args.NAME)):
+        raise SystemExit(
+            f"{ERROR} names must only consists of alphanumeric characters, hyphens, "
+            "or underscores"
+        )
+
+    # Make sure secret with this name is not in config file or .lockey
+    if get_secret_filepath_by_name(args.NAME) is not None:
+        raise SystemExit(
+            f"{ERROR} found existing secret in vault with base name {args.NAME}"
+        )
+
+    with get_verified_config() as config:
+        data_path = config["data_path"]
+        if args.NAME in config:
+            raise SystemExit(
+                f"{ERROR} name {args.NAME} already present in lockey's config file"
+            )
+
+    # Have user enter secret
+    secret = getpass.getpass(prompt="secret: ")
+    passphrase = getpass.getpass(prompt="passphrase: ")
+    assert isinstance(data_path, str | os.PathLike) and os.path.exists(data_path)
+    output_filepath = encrypt_secret(
+        secret=secret, passphrase=passphrase, data_path=data_path, name=args.NAME
+    )
+
+    # Add information to config
+    with get_verified_config() as config:
+        # HACK: Use a better data structure for the config in the code
+        assert isinstance(config["secrets"], dict)
+        config["secrets"][args.NAME] = {"message": args.MSG}
+    print(f"{SUCCESS} secret encrypted in {output_filepath}")
 
 
 def execute_get(args: argparse.Namespace) -> None:
@@ -234,9 +319,6 @@ def execute_rm(args: argparse.Namespace) -> None:
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
-    # TODO: Make sure data dir contains only gpg files
-    # TODO: Make sure config file names are consistent with gpg filenames
-
     config_filepath = get_config_metadata("filepath")
     with open(config_filepath, "r") as f:
         config: ConfigSchema = json.load(f)
@@ -252,6 +334,7 @@ def execute_destroy(args: argparse.Namespace) -> None:
     while True:
         if args.skip_confirm == True:
             resp = "y"
+            break
         else:
             resp = input("Delete all lockey data (y/n)? ")
         if resp not in ["y", "n"]:
@@ -259,11 +342,13 @@ def execute_destroy(args: argparse.Namespace) -> None:
         elif resp == "n":
             print(f"{NOTE} no data was deleted")
             return None
-        os.rmdir(data_path)
-        print(f"{SUCCESS} deleted lockey data at {data_path}")
-        shutil.rmtree(CONFIG_PATH)
-        print(f"{SUCCESS} deleted lockey config at {data_path}")
-        return None
+        else:
+            break
+
+    shutil.rmtree(data_path)
+    print(f"{SUCCESS} deleted lockey data at {data_path}")
+    shutil.rmtree(CONFIG_PATH)
+    print(f"{SUCCESS} deleted lockey config at {data_path}")
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -289,7 +374,7 @@ def get_parser() -> argparse.ArgumentParser:
         description=(
             "Initialize the lockey vault in the location specified with the --dir flag "
             "or in the default location of $HOME/.lockey/. Also initializes lockey's "
-            "config file at $HOME/.config/lockey/lockey.json."
+            "config file at $HOME/.config/lockey/"
         ),
     )
     parser_init.add_argument(
@@ -306,17 +391,25 @@ def get_parser() -> argparse.ArgumentParser:
         name="add",
         help="add a new password to the vault",
         description=(
-            "Add a new password to the vault. It's description, if supplied, is saved "
-            "in lockeyconfig.json."
+            "Add a new password to the vault. Optionally specify a description that "
+            "will get displayed with `lockey ls`."
         ),
     )
     parser_init.add_argument(
-        "-d",
-        "--desc",
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="the name with which you can reference the secret with `lockey get`",
+        dest="NAME",
+    )
+    parser_init.add_argument(
+        "-m",
+        "--message",
         required=False,
         type=str,
-        help="a description for the password",
-        dest="DESC",
+        help="a description for the password (must be in double quotes)",
+        dest="MSG",
     )
 
     # ls subcommand
@@ -394,3 +487,13 @@ def main():
         execute_destroy(args)
     else:
         raise SystemExit(f"{ERROR} command {args.command} not recognized")
+
+
+if __name__ == "__main__":
+    gpg = gnupg.GPG()
+    encrypted_data = gpg.encrypt(
+        data="supersecretdata",
+        symmetric="AES256",
+        passphrase="password",
+        output="test.gpg",
+    )
