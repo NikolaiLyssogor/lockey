@@ -244,6 +244,8 @@ def execute_ls(args: argparse.Namespace) -> None:
     max_message_len = 40
     gap = " " * (max_name_len + 5)
 
+    print("NAME" + gap[:-4] + "DESCRIPTION")
+
     for name, secret_data in secrets.items():
         message = secret_data["message"]
         if message is None:
@@ -263,7 +265,7 @@ def execute_ls(args: argparse.Namespace) -> None:
         if len(name) > max_name_len:
             first_line = name
         else:
-            first_line_gap = gap[len(name):]
+            first_line_gap = gap[len(name) :]
             first_line = name + first_line_gap + message_lines[0]
 
         print(first_line)
@@ -396,7 +398,6 @@ def execute_get(args: argparse.Namespace) -> None:
 
 def execute_rm(args: argparse.Namespace) -> None:
     raise NotImplementedError
-
 
 def execute_destroy(args: argparse.Namespace) -> None:
     config_filepath = get_config_metadata("filepath")
@@ -531,7 +532,7 @@ def get_parser() -> argparse.ArgumentParser:
         "--name",
         nargs="+",
         type=str,
-        required=False,
+        required=True,
         help="the name of the password(s) to delete as displayed in `lockey ls`",
         dest="NAME",
         action="extend",
