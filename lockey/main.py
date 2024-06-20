@@ -10,7 +10,7 @@ import subprocess
 import typing
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, Literal, Tuple
+from typing import Any, Iterator, Literal, ParamSpec, Tuple
 
 # TODO: verify cli's files all are in correct place
 # in a uniform way for commands add, get, destroy, ls, rm
@@ -336,6 +336,9 @@ def execute_add(args: argparse.Namespace) -> None:
     # Have user enter secret
     secret = getpass.getpass(prompt="secret: ")
     passphrase = getpass.getpass(prompt="passphrase: ")
+    confirm_passphrase = getpass.getpass(prompt="confirm passphrase: ")
+    if passphrase != confirm_passphrase:
+        raise SystemExit(f"{ERROR} passphrases do not match")
     assert isinstance(data_path, str | os.PathLike) and os.path.exists(data_path)
     output_filepath = encrypt_secret(
         secret=secret, passphrase=passphrase, data_path=data_path, name=args.NAME
