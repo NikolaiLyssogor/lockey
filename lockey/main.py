@@ -10,6 +10,7 @@ import subprocess
 import typing
 from contextlib import contextmanager
 from dataclasses import dataclass
+from logging import WARN
 from typing import Any, Iterator, Literal, ParamSpec, Tuple
 
 # TODO: verify cli's files all are in correct place
@@ -313,11 +314,11 @@ def encrypt_secret(
 
 def execute_add(args: argparse.Namespace) -> None:
     # Make sure name is valid
-    pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+    pattern = re.compile(r"^[a-zA-Z0-9\-_@.]+$")
     if not bool(pattern.match(args.NAME)):
         raise SystemExit(
             f"{ERROR} names must only consists of alphanumeric characters, hyphens, "
-            "or underscores"
+            "underscores, periods, or the @ symbol"
         )
 
     # Make sure secret with this name is not in config file or .lockey
@@ -332,24 +333,34 @@ def execute_add(args: argparse.Namespace) -> None:
             raise SystemExit(
                 f"{ERROR} name {args.NAME} already present in lockey's config file"
             )
-
-    # Have user enter secret
-    secret = getpass.getpass(prompt="secret: ")
-    passphrase = getpass.getpass(prompt="passphrase: ")
-    confirm_passphrase = getpass.getpass(prompt="confirm passphrase: ")
-    if passphrase != confirm_passphrase:
-        raise SystemExit(f"{ERROR} passphrases do not match")
     assert isinstance(data_path, str | os.PathLike) and os.path.exists(data_path)
-    output_filepath = encrypt_secret(
-        secret=secret, passphrase=passphrase, data_path=data_path, name=args.NAME
-    )
+
+    if args.PLAIN:
+        secret = input("secret: ")
+        output_filepath = os.path.join(data_path, args.NAME)
+        with open(output_filepath, "a") as f:
+            f.write(secret)
+    else:
+        secret = getpass.getpass(prompt="secret: ")
+        passphrase = getpass.getpass(prompt="passphrase: ")
+        confirm_passphrase = getpass.getpass(prompt="confirm passphrase: ")
+        if passphrase != confirm_passphrase:
+            raise SystemExit(f"{ERROR} passphrases do not match")
+        output_filepath = encrypt_secret(
+            secret=secret, passphrase=passphrase, data_path=data_path, name=args.NAME
+        )
 
     # Add information to config
     with get_verified_config("w") as config:
-        # HACK: Use a better data structure for the config in the code
         assert isinstance(config["secrets"], dict)
         config["secrets"][args.NAME] = {"message": args.MSG}
-    print(f"{SUCCESS} secret encrypted in {output_filepath}")
+    if args.PLAIN:
+        print(
+            f"{WARNING} secret stored as plaintext in {output_filepath} "
+             "(ignore this if that is what was desired)"
+        )
+    else:
+        print(f"{SUCCESS} secret encrypted in {output_filepath}")
 
 
 def decrypt_secret(secret_filepath: str | os.PathLike[Any], passphrase: str) -> str:
@@ -388,13 +399,24 @@ def send_secret_to_clipboard(secret: str) -> None:
     process.communicate(secret.encode("utf-8"))
 
 
+def is_secret_encrypted(secret_filepath: str | os.PathLike[Any]) -> bool:
+    # TODO: Make this more robust. Maybe something like
+    # subprocess.Popen(["file", secret_filepath])
+    return str(secret_filepath).endswith(".gpg")
+
+
 def execute_get(args: argparse.Namespace) -> None:
     secret_filepath = get_secret_filepath_by_name(args.NAME)
     if secret_filepath is None:
         raise SystemExit(f"{ERROR} secret {args.NAME} not found")
 
-    passphrase = getpass.getpass("passphrase: ")
-    secret = decrypt_secret(secret_filepath, passphrase)
+    if is_secret_encrypted(secret_filepath):
+        passphrase = getpass.getpass("passphrase: ")
+        secret = decrypt_secret(secret_filepath, passphrase)
+    else:
+        with open(secret_filepath, "r") as f:
+            secret = f.read()
+
     send_secret_to_clipboard(secret)
     print(f"{SUCCESS} secret {args.NAME} copied to clipboard")
 
@@ -495,6 +517,16 @@ def get_parser() -> argparse.ArgumentParser:
         type=str,
         help="a description for the password (must be in double quotes)",
         dest="MSG",
+    )
+    parser_init.add_argument(
+        "-p",
+        "--plaintext",
+        action="store_true",
+        help=(
+            "whether or not to encrypt the secret. unencrypted secrets are stored in "
+            "plain text and do not require a passphrase to retrieve"
+        ),
+        dest="PLAIN",
     )
 
     # get subcommand
