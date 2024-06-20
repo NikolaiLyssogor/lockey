@@ -246,7 +246,7 @@ def execute_ls(args: argparse.Namespace) -> None:
 
     print("NAME" + gap[:-4] + "DESCRIPTION")
 
-    for name, secret_data in secrets.items():
+    for name, secret_data in sorted(secrets.items(), key=lambda x: x[0]):
         message = secret_data["message"]
         if message is None:
             print(name)
