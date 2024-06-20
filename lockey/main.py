@@ -181,7 +181,10 @@ def get_verified_config(mode: Literal["r", "w"]) -> Iterator[ConfigSchema]:
             os.rename(config_filepath, new_config_filename)
 
 
-def get_secret_filepath_by_name(name: str) -> str | os.PathLike[Any] | None:
+def get_secret_filepath_by_name(
+    name: str, getfrom: Literal["config", "vault"] = "vault"
+) -> str | os.PathLike[Any] | None:
+    # TODO: Make sure this works with unenctyped files
     with get_verified_config("r") as config:
         data_path = config["data_path"]
 
@@ -357,7 +360,7 @@ def execute_add(args: argparse.Namespace) -> None:
     if args.PLAIN:
         print(
             f"{WARNING} secret stored as plaintext in {output_filepath} "
-             "(ignore this if that is what was desired)"
+            "(ignore this if that is what was desired)"
         )
     else:
         print(f"{SUCCESS} secret encrypted in {output_filepath}")
@@ -422,7 +425,26 @@ def execute_get(args: argparse.Namespace) -> None:
 
 
 def execute_rm(args: argparse.Namespace) -> None:
-    raise NotImplementedError
+    secret_filepath = get_secret_filepath_by_name(args.NAME, getfrom="vault")
+    in_vault = secret_filepath is not None
+    with get_verified_config("r") as config:
+        in_config = args.NAME in config["secrets"]
+
+    if not in_config and not in_vault:
+        raise SystemExit(f"{ERROR} name {args.NAME} not found in config or vault")
+
+    if in_config:
+        with get_verified_config("w") as config:
+            assert isinstance(config["secrets"], dict)
+            del config["secrets"][args.NAME]
+            print(f"{SUCCESS} entry for {args.NAME} deleted from config file")
+    else:
+        print(f"{WARNING} entry for {args.NAME} not found in config file")
+    if in_vault:
+        os.remove(secret_filepath)
+        print(f"{SUCCESS} entry for {args.NAME} deleted from vault")
+    else:
+        print(f"{WARNING} entry for {args.NAME} not found in vault")
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
@@ -566,12 +588,11 @@ def get_parser() -> argparse.ArgumentParser:
     parser_init.add_argument(
         "-n",
         "--name",
-        nargs="+",
         type=str,
         required=True,
-        help="the name of the password(s) to delete as displayed in `lockey ls`",
+        help="the name of the secret to delete as displayed in `lockey ls`",
         dest="NAME",
-        action="extend",
+        action="store",
     )
 
     # destroy subcommand
