@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import typing
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Iterator, Literal, Tuple
 
 # TODO: verify cli's files all are in correct place
@@ -18,7 +19,6 @@ COMMANDS: Tuple[CommandType, ...] = typing.get_args(CommandType)
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
 CONFIG_PATH = os.path.expanduser("~/.config/lockey/")
-VERSION_FALLBACK = "0.1.0"
 
 SUCCESS = "\033[32msuccess:\033[0m"
 WARNING = "\033[33mwarning:\033[0m"
@@ -153,13 +153,13 @@ def get_config() -> ConfigSchema:
         # TODO: Make sure the context manager doesn't recompute the hash
         raise ChecksumVerificationError
     else:
-        with open(config_filepath, "rb") as f:
+        with open(config_filepath, "r") as f:
             config = json.load(f)
         return config
 
 
 @contextmanager
-def get_verified_config() -> Iterator[ConfigSchema]:
+def get_verified_config(mode: Literal["r", "w"]) -> Iterator[ConfigSchema]:
     config = get_config()
     checksum_is_valid = True
     try:
@@ -169,7 +169,7 @@ def get_verified_config() -> Iterator[ConfigSchema]:
         checksum_is_valid = False
         raise
     finally:
-        if checksum_is_valid:
+        if checksum_is_valid and mode == "w":
             with open(get_config_metadata("filepath"), "w") as f:
                 json.dump(config, f, indent=2)
 
@@ -181,7 +181,7 @@ def get_verified_config() -> Iterator[ConfigSchema]:
 
 
 def get_secret_filepath_by_name(name: str) -> str | os.PathLike[Any] | None:
-    with get_verified_config() as config:
+    with get_verified_config("r") as config:
         data_path = config["data_path"]
 
     if not isinstance(data_path, str | os.PathLike) or not os.path.exists(data_path):
@@ -212,7 +212,7 @@ def execute_init(args: argparse.Namespace) -> None:
     # Make sure the directory passed exists
     data_head, _ = os.path.split(data_path)
     if not os.path.exists(data_head):
-        raise SystemExit(f"{ERROR} head of supplied path {data_head} does not exist")
+        raise SystemExit(f"{ERROR} supplied path {data_head} does not exist")
 
     # Create ~/.lockey and .config/lockey/config.json
     config: ConfigSchema = {"data_path": data_path, "secrets": {}}
@@ -231,7 +231,7 @@ def execute_init(args: argparse.Namespace) -> None:
 
 
 def execute_ls(args: argparse.Namespace) -> None:
-    with get_verified_config() as config:
+    with get_verified_config("r") as config:
         secrets = config["secrets"]
     if not secrets:
         print("no secrets stored")
@@ -248,7 +248,7 @@ def execute_ls(args: argparse.Namespace) -> None:
 
     for name, secret_data in sorted(secrets.items(), key=lambda x: x[0]):
         message = secret_data["message"]
-        if message is None:
+        if not message:
             print(name)
             continue
 
@@ -326,7 +326,7 @@ def execute_add(args: argparse.Namespace) -> None:
             f"{ERROR} found existing secret in vault with base name {args.NAME}"
         )
 
-    with get_verified_config() as config:
+    with get_verified_config("r") as config:
         data_path = config["data_path"]
         if args.NAME in config:
             raise SystemExit(
@@ -342,7 +342,7 @@ def execute_add(args: argparse.Namespace) -> None:
     )
 
     # Add information to config
-    with get_verified_config() as config:
+    with get_verified_config("w") as config:
         # HACK: Use a better data structure for the config in the code
         assert isinstance(config["secrets"], dict)
         config["secrets"][args.NAME] = {"message": args.MSG}
@@ -398,6 +398,7 @@ def execute_get(args: argparse.Namespace) -> None:
 
 def execute_rm(args: argparse.Namespace) -> None:
     raise NotImplementedError
+
 
 def execute_destroy(args: argparse.Namespace) -> None:
     config_filepath = get_config_metadata("filepath")
