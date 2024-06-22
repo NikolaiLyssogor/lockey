@@ -421,7 +421,16 @@ def execute_get(args: argparse.Namespace) -> None:
             secret = f.read()
 
     send_secret_to_clipboard(secret)
-    print(f"{SUCCESS} secret {args.NAME} copied to clipboard")
+
+    with get_verified_config("r") as config:
+        timeout = config.get("clipboard_timeout", 45)
+    if not isinstance(timeout, int) or timeout < 0:
+        raise SystemExit(f"{ERROR} invalid value for clipboard_timeout: {timeout}")
+
+    subprocess.Popen(
+        ["sh", "./clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
+    )
+    print(f"{SUCCESS} secret {args.NAME} copied to clipboard for {timeout} seconds.")
 
 
 def execute_rm(args: argparse.Namespace) -> None:
@@ -640,3 +649,5 @@ def main():
         execute_destroy(args)
     else:
         raise SystemExit(f"{ERROR} command {args.command} not recognized")
+
+
