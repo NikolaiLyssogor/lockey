@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import getpass
 import hashlib
 import importlib.metadata
@@ -9,14 +10,13 @@ import shutil
 import subprocess
 import typing
 from contextlib import contextmanager
-from dataclasses import dataclass
-from logging import WARN
-from typing import Any, Iterator, Literal, ParamSpec, Tuple
+from typing import Any, Iterator, Literal, Tuple, Type, TypeVar
 
-# TODO: verify cli's files all are in correct place
-# in a uniform way for commands add, get, destroy, ls, rm
 CommandType = Literal["init", "add", "ls", "get", "rm", "destroy"]
 COMMANDS: Tuple[CommandType, ...] = typing.get_args(CommandType)
+
+ConfigOption = Literal["data_path", "clipboard_timeout"]
+CONFIG_OPTIONS: Tuple[ConfigOption, ...] = typing.get_args(ConfigOption)
 
 DEFAULT_DATA_PATH = os.path.expanduser("~/.lockey")
 CONFIG_PATH = os.path.expanduser("~/.config/lockey/")
@@ -28,8 +28,9 @@ NOTE = "\033[36mnote:\033[0m"
 
 BUFSIZE = 65536
 
-SecretMetadata = dict[str, dict[str, str]]
-ConfigSchema = dict[str, str | SecretMetadata]
+T = TypeVar("T")
+SecretSchema = dict[str, dict[str, str]]
+ConfigSchema = dict[str, str | int | SecretSchema]
 
 
 class ChecksumVerificationError(Exception):
@@ -145,7 +146,79 @@ def get_hash(filepath: str) -> str:
     return sha256.hexdigest()
 
 
-def get_config() -> ConfigSchema:
+@dataclasses.dataclass
+class LockeySecret:
+    name: str
+    message: str
+    is_unencrypted: bool
+
+
+@dataclasses.dataclass
+class LockeyConfig:
+    data_path: str | os.PathLike[Any]
+    clipboard_timeout: int
+    secrets: list[LockeySecret]
+    init: dataclasses.InitVar[bool] = False
+
+    def __post_init__(self, first_write: bool):
+        if first_write:
+            if os.path.exists(self.data_path):
+                raise SystemExit(f"{ERROR} directory {self.data_path} already exists")
+            if os.path.exists(CONFIG_PATH):
+                raise SystemExit(f"{ERROR} directory {CONFIG_PATH} already exists")
+
+            # Make sure the directory passed exists
+            data_head, _ = os.path.split(self.data_path)
+            if not os.path.exists(data_head):
+                raise SystemExit(f"{ERROR} supplied path {data_head} does not exist")
+        else:
+            if not os.path.exists(self.data_path):
+                raise SystemExit(f"{ERROR} vault path {self.data_path} does not exist")
+            if self.clipboard_timeout < 0:
+                raise SystemExit(
+                    f"{ERROR} invalid config value {self.clipboard_timeout} for "
+                    "clipboard timeout"
+                )
+            for secret in self.secrets:
+                secret_filepath = os.path.join(self.data_path, secret.name)
+                if not secret.is_unencrypted:
+                    secret_filepath = secret_filepath + ".gpg"
+                if not os.path.exists(secret_filepath):
+                    raise SystemExit(
+                        f"{ERROR} secret path {secret_filepath} does not exist"
+                    )
+
+
+def from_dict(data: dict[Any, Any], data_class: Type[T]) -> T:
+    if not dataclasses.is_dataclass(data_class):
+        raise ValueError(f"{data_class} is not a dataclass")
+
+    field_types = {f.name: f.type for f in dataclasses.fields(data_class)}
+
+    kwargs = {}
+    for field_name, field_type in field_types.items():
+        if field_name not in data:
+            raise SystemExit(f"{ERROR} field {field_name} not in lockey config")
+
+        if dataclasses.is_dataclass(field_type):
+            kwargs[field_name] = from_dict(data[field_name], field_type)
+        elif hasattr(field_type, "__origin__") and field_type.__origin__ is list:
+            item_type = field_type.__args__[0]
+            kwargs[field_name] = [
+                (
+                    from_dict(item, item_type)
+                    if dataclasses.is_dataclass(item_type)
+                    else item
+                )
+                for item in data[field_name]
+            ]
+        else:
+            kwargs[field_name] = data[field_name]
+
+    return data_class(**kwargs)
+
+
+def get_config() -> LockeyConfig:
     config_filepath = get_config_metadata("filepath")
     old_hash = get_config_metadata("filename")
     cur_hash = get_hash(config_filepath)
@@ -156,11 +229,11 @@ def get_config() -> ConfigSchema:
     else:
         with open(config_filepath, "r") as f:
             config = json.load(f)
-        return config
+        return from_dict(config, LockeyConfig)
 
 
 @contextmanager
-def get_verified_config(mode: Literal["r", "w"]) -> Iterator[ConfigSchema]:
+def get_verified_config(mode: Literal["r", "w"]) -> Iterator[LockeyConfig]:
     config = get_config()
     checksum_is_valid = True
     try:
@@ -171,8 +244,9 @@ def get_verified_config(mode: Literal["r", "w"]) -> Iterator[ConfigSchema]:
         raise
     finally:
         if checksum_is_valid and mode == "w":
+            config_dict = dataclasses.asdict(config)
             with open(get_config_metadata("filepath"), "w") as f:
-                json.dump(config, f, indent=2)
+                json.dump(config_dict, f, indent=2)
 
             # Recompute hash and save as filename
             config_filepath = get_config_metadata("filepath")
@@ -186,10 +260,7 @@ def get_secret_filepath_by_name(
 ) -> str | os.PathLike[Any] | None:
     # TODO: Make sure this works with unenctyped files
     with get_verified_config("r") as config:
-        data_path = config["data_path"]
-
-    if not isinstance(data_path, str | os.PathLike) or not os.path.exists(data_path):
-        raise SystemExit(f"{ERROR} data path in config file does not exist")
+        data_path = config.data_path
 
     for filename in os.listdir(data_path):
         basename, _ = os.path.splitext(filename)
@@ -208,22 +279,16 @@ def execute_init(args: argparse.Namespace) -> None:
     else:
         data_path = DEFAULT_DATA_PATH
 
-    if os.path.exists(data_path):
-        raise SystemExit(f"{ERROR} directory {data_path} already exists")
-    if os.path.exists(CONFIG_PATH):
-        raise SystemExit(f"{ERROR} directory {CONFIG_PATH} already exists")
-
-    # Make sure the directory passed exists
-    data_head, _ = os.path.split(data_path)
-    if not os.path.exists(data_head):
-        raise SystemExit(f"{ERROR} supplied path {data_head} does not exist")
-
     # Create ~/.lockey and .config/lockey/config.json
-    config: ConfigSchema = {"data_path": data_path, "secrets": {}}
+    config = LockeyConfig(
+        data_path=data_path, clipboard_timeout=45, secrets=[], init=True
+    )
     os.mkdir(CONFIG_PATH)
     temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
+    config_dict = dataclasses.asdict(config)
     with open(temp_config_filepath, "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(config_dict, f, indent=2)
+
     os.chmod(temp_config_filepath, 0o600)
     config_hash = get_hash(temp_config_filepath)
     config_filepath = os.path.join(CONFIG_PATH, config_hash)
@@ -236,13 +301,14 @@ def execute_init(args: argparse.Namespace) -> None:
 
 def execute_ls(args: argparse.Namespace) -> None:
     with get_verified_config("r") as config:
-        secrets = config["secrets"]
+        secrets = config.secrets
     if not secrets:
         print("no secrets stored")
         return None
 
     # If name is longer than first line of message will be on different line
-    longest_name = max(len(k) for k in secrets)
+    secret_names = [secret.name for secret in secrets]
+    longest_name = max(len(name) for name in secret_names)
     max_name_len = min(30, longest_name)
     # Max length of each line of messages
     max_message_len = 40
@@ -250,14 +316,13 @@ def execute_ls(args: argparse.Namespace) -> None:
 
     print("NAME" + gap[:-4] + "DESCRIPTION")
 
-    for name, secret_data in sorted(secrets.items(), key=lambda x: x[0]):
-        message = secret_data["message"]
-        if not message:
-            print(name)
+    for secret in sorted(secrets, key=lambda s: s.name):
+        if not secret.message:
+            print(secret.name)
             continue
 
         message_lines = [""]
-        message_split = message.split(" ")
+        message_split = secret.message.split(" ")
         for word in message_split:
             if len(message_lines[-1]) + len(word) + 1 > max_message_len:
                 message_lines.append(word + " ")
@@ -266,14 +331,14 @@ def execute_ls(args: argparse.Namespace) -> None:
 
         message_lines = [line.strip() for line in message_lines]
         # First line may or may not have part of the description on it
-        if len(name) > max_name_len:
-            first_line = name
+        if len(secret.name) > max_name_len:
+            first_line = secret.name
         else:
-            first_line_gap = gap[len(name) :]
-            first_line = name + first_line_gap + message_lines[0]
+            first_line_gap = gap[len(secret.name) :]
+            first_line = secret.name + first_line_gap + message_lines[0]
 
         print(first_line)
-        if len(name) > max_name_len:
+        if len(secret.name) > max_name_len:
             print(gap + message_lines[0])
         if len(message_lines) > 1:
             for line in message_lines[1:]:
@@ -331,12 +396,13 @@ def execute_add(args: argparse.Namespace) -> None:
         )
 
     with get_verified_config("r") as config:
-        data_path = config["data_path"]
-        if args.NAME in config:
-            raise SystemExit(
-                f"{ERROR} name {args.NAME} already present in lockey's config file"
-            )
-    assert isinstance(data_path, str | os.PathLike) and os.path.exists(data_path)
+        data_path = config.data_path
+        secrets = config.secrets
+
+    if any(s.name == args.NAME for s in secrets):
+        raise SystemExit(
+            f"{ERROR} name {args.NAME} already present in lockey's config file"
+        )
 
     if args.PLAIN:
         secret = input("secret: ")
@@ -355,8 +421,10 @@ def execute_add(args: argparse.Namespace) -> None:
 
     # Add information to config
     with get_verified_config("w") as config:
-        assert isinstance(config["secrets"], dict)
-        config["secrets"][args.NAME] = {"message": args.MSG}
+        new_secret = LockeySecret(
+            name=args.NAME, message=args.MSG, is_unencrypted=args.PLAIN
+        )
+        config.secrets.append(new_secret)
     if args.PLAIN:
         print(
             f"{WARNING} secret stored as plaintext in {output_filepath} "
@@ -423,12 +491,10 @@ def execute_get(args: argparse.Namespace) -> None:
     send_secret_to_clipboard(secret)
 
     with get_verified_config("r") as config:
-        timeout = config.get("clipboard_timeout", 45)
-    if not isinstance(timeout, int) or timeout < 0:
-        raise SystemExit(f"{ERROR} invalid value for clipboard_timeout: {timeout}")
+        timeout = config.clipboard_timeout
 
     subprocess.Popen(
-        ["sh", "./clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
+        ["sh", "./lockey/clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
     )
     print(f"{SUCCESS} secret {args.NAME} copied to clipboard for {timeout} seconds.")
 
@@ -437,15 +503,14 @@ def execute_rm(args: argparse.Namespace) -> None:
     secret_filepath = get_secret_filepath_by_name(args.NAME, getfrom="vault")
     in_vault = secret_filepath is not None
     with get_verified_config("r") as config:
-        in_config = args.NAME in config["secrets"]
+        in_config = any(args.NAME == s.name for s in config.secrets)
 
     if not in_config and not in_vault:
         raise SystemExit(f"{ERROR} name {args.NAME} not found in config or vault")
 
     if in_config:
         with get_verified_config("w") as config:
-            assert isinstance(config["secrets"], dict)
-            del config["secrets"][args.NAME]
+            config.secrets = [s for s in config.secrets if s.name != args.NAME]
             print(f"{SUCCESS} entry for {args.NAME} deleted from config file")
     else:
         print(f"{WARNING} entry for {args.NAME} not found in config file")
@@ -457,17 +522,8 @@ def execute_rm(args: argparse.Namespace) -> None:
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
-    config_filepath = get_config_metadata("filepath")
-    with open(config_filepath, "r") as f:
-        config: ConfigSchema = json.load(f)
-
-    # Ensure config data_path is valid
-    data_path = config["data_path"]
-    if not isinstance(data_path, str | os.PathLike) or not os.path.exists(data_path):
-        raise SystemExit(
-            f"{ERROR} secrets directory {data_path} specified in "
-            f"{CONFIG_PATH} not found"
-        )
+    with get_verified_config("r") as config:
+        data_path = config.data_path
 
     while True:
         if args.skip_confirm == True:
@@ -649,5 +705,3 @@ def main():
         execute_destroy(args)
     else:
         raise SystemExit(f"{ERROR} command {args.command} not recognized")
-
-

@@ -1,4 +1,3 @@
-import copy
 import json
 import os
 import shutil
@@ -107,7 +106,7 @@ def test_destroy_missing_data_path():
     os.rmdir(data_path)
 
     args = parser.parse_args(["destroy", "-y"])
-    error_msg = r".* secrets directory .* specified in .* not found"
+    error_msg = r".* vault path .* does not exist"
     with pytest.raises(SystemExit, match=error_msg):
         lockey.main.execute_destroy(args)
 
@@ -138,8 +137,8 @@ def test_context_manager_basic():
 
     old_filepath = lockey.main.get_config_metadata("filepath")
     old_hash = lockey.main.get_hash(old_filepath)
-    with lockey.main.get_verified_config() as config:
-        config["key"] = "value"
+    with lockey.main.get_verified_config("w") as config:
+        config.clipboard_timeout = 1000
     new_filepath = lockey.main.get_config_metadata("filepath")
     new_hash = lockey.main.get_hash(new_filepath)
     assert old_hash != new_hash
@@ -161,7 +160,7 @@ def test_context_manager_checksum_fail():
         json.dump(config, f, indent=2)
 
     with pytest.raises(lockey.main.ChecksumVerificationError):
-        with lockey.main.get_verified_config() as config:
+        with lockey.main.get_verified_config("r") as config:
             pass
     # Make sure checksum is not recomputed on error
     assert os.path.exists(config_filepath)
@@ -195,8 +194,10 @@ def test_add_duplicate_name_config():
 def test_add_duplicate_name_data():
     assert True
 
+
 def test_add_encryption_basic():
     assert True
+
 
 def test_decrypt_basic():
     assert True
