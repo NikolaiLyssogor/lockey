@@ -506,7 +506,7 @@ def execute_get(args: argparse.Namespace) -> None:
         timeout = config.clipboard_timeout
 
     subprocess.Popen(
-        ["sh", "./lockey/clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
+        ["sh", "./clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
     )
     print(f"{SUCCESS} secret {args.NAME} copied to clipboard for {timeout} seconds.")
 
