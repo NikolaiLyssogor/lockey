@@ -1,0 +1,66 @@
+#compdef _lockey lockey
+
+function _lockey {
+    local line
+
+    _arguments -C \
+        "-h[show help information]" \
+        "--help[show help information]" \
+        "-v[print lockey version]" \
+        "--version[print lockey version]" \
+        "1: :(init add ls get rm destroy)" \
+        "*::arg:->args"
+
+    case $line[1] in
+        init)
+            _lockey_init
+        ;;
+        add)
+            _lockey_add
+        ;;
+        ls)
+            _lockey_ls
+        ;;
+        get)
+            _lockey_get
+        ;;
+        rm)
+            _lockey_rm
+        ;;
+        destroy)
+            _lockey_destroy
+        ;;
+    esac
+}
+
+function _lockey_init {
+    _arguments \
+        "-f[path in which to store secrets]"
+}
+
+function _lockey_add {
+    _arguments
+        "-n[the name of the secret]" \
+        "-m[description for the secret]" \
+        "-p[do not encrypt the secrety]"
+}
+
+function _lockey_ls {
+    # no args for lockey ls
+}
+
+function _lockey_get {
+    # NOTE: This will fail if secrets are not in default dir
+    _arguments \
+        "-n[the name of the secret to copy]:name:_files -W $HOME/.lockey/"
+}
+
+function _lockey_rm {
+    _arguments \
+        "-n[the name of the secret to delete]:name:_files -W $HOME/.lockey/"
+}
+
+function _lockey_destroy {
+    _arguments \
+        "-y[skip confirmation]"
+}

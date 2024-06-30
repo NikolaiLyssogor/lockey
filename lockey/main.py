@@ -104,7 +104,11 @@ def get_config_metadata(info_type: Literal["filepath", "filename"]) -> str:
     if not os.path.exists(CONFIG_PATH):
         raise SystemExit(f"{ERROR} config directory {CONFIG_PATH} not found")
 
-    config_dir_files = os.listdir(CONFIG_PATH)
+    config_dir_files = [
+        f
+        for f in os.listdir(CONFIG_PATH)
+        if os.path.isfile(os.path.join(CONFIG_PATH, f))
+    ]
     if len(config_dir_files) > 1:
         raise SystemExit(f"{ERROR} unexpected config directory contents")
     elif len(config_dir_files) == 0:
@@ -181,8 +185,8 @@ class LockeyConfig:
                 )
             for secret in self.secrets:
                 secret_filepath = os.path.join(self.data_path, secret.name)
-                if not secret.is_unencrypted:
-                    secret_filepath = secret_filepath + ".gpg"
+                # if not secret.is_unencrypted:
+                #     secret_filepath = secret_filepath + ".gpg"
                 if not os.path.exists(secret_filepath):
                     raise SystemExit(
                         f"{ERROR} secret path {secret_filepath} does not exist"
@@ -348,7 +352,7 @@ def execute_ls(args: argparse.Namespace) -> None:
 def encrypt_secret(
     secret: str, passphrase: str, data_path: str | os.PathLike[Any], name: str
 ) -> str | os.PathLike[Any]:
-    output_filepath = os.path.join(data_path, name + ".gpg")
+    output_filepath = os.path.join(data_path, name)
     try:
         command = [
             "gpg",
@@ -470,10 +474,18 @@ def send_secret_to_clipboard(secret: str) -> None:
     process.communicate(secret.encode("utf-8"))
 
 
-def is_secret_encrypted(secret_filepath: str | os.PathLike[Any]) -> bool:
+def is_secret_encrypted(secret_name: str) -> bool:
     # TODO: Make this more robust. Maybe something like
     # subprocess.Popen(["file", secret_filepath])
-    return str(secret_filepath).endswith(".gpg")
+    is_unencrypted = None
+    with get_verified_config("r") as config:
+        for secret in config.secrets:
+            if secret.name == secret_name:
+                is_unencrypted = secret.is_unencrypted
+                break
+    if is_unencrypted is None:
+        raise SystemExit(f"{ERROR} secret name {secret_name} not found")
+    return not is_unencrypted
 
 
 def execute_get(args: argparse.Namespace) -> None:
@@ -481,7 +493,7 @@ def execute_get(args: argparse.Namespace) -> None:
     if secret_filepath is None:
         raise SystemExit(f"{ERROR} secret {args.NAME} not found")
 
-    if is_secret_encrypted(secret_filepath):
+    if is_secret_encrypted(args.NAME):
         passphrase = getpass.getpass("passphrase: ")
         secret = decrypt_secret(secret_filepath, passphrase)
     else:
