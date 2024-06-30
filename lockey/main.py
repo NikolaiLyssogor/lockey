@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import typing
 from contextlib import contextmanager
-from typing import Any, Iterator, Literal, Tuple, Type, TypeVar
+from typing import Any, Iterator, Literal, Optional, Tuple, Type, TypeVar
 
 CommandType = Literal["init", "add", "ls", "get", "rm", "destroy"]
 COMMANDS: Tuple[CommandType, ...] = typing.get_args(CommandType)
@@ -154,15 +154,15 @@ def get_hash(filepath: str) -> str:
 class LockeySecret:
     name: str
     message: str
-    is_unencrypted: bool
+    is_unencrypted: Optional[bool]
 
 
 @dataclasses.dataclass
 class LockeyConfig:
     data_path: str | os.PathLike[Any]
-    clipboard_timeout: int
     secrets: list[LockeySecret]
-    init: dataclasses.InitVar[bool] = False
+    clipboard_timeout: int = 45
+    first_write: dataclasses.InitVar[bool] = False
 
     def __post_init__(self, first_write: bool):
         if first_write:
@@ -184,13 +184,54 @@ class LockeyConfig:
                     "clipboard timeout"
                 )
             for secret in self.secrets:
-                secret_filepath = os.path.join(self.data_path, secret.name)
-                # if not secret.is_unencrypted:
-                #     secret_filepath = secret_filepath + ".gpg"
-                if not os.path.exists(secret_filepath):
-                    raise SystemExit(
-                        f"{ERROR} secret path {secret_filepath} does not exist"
+                secret_fp = os.path.join(self.data_path, secret.name)
+                if not os.path.exists(secret_fp):
+                    raise SystemExit(f"{ERROR} secret path {secret_fp} does not exist")
+                if secret.is_unencrypted is None:
+                    secret.is_unencrypted = not self.is_secret_encrypted(
+                        secret_fp, getfrom="vault"
                     )
+
+    def is_secret_encrypted(
+        self, secret_fp: str | os.PathLike[Any], getfrom: Literal["config", "vault"]
+    ):
+        _, secret_name = os.path.split(secret_fp)
+
+        if getfrom == "config":
+            is_unencrypted = None
+            for secret in self.secrets:
+                if secret.name == secret_name:
+                    is_unencrypted = secret.is_unencrypted
+                    break
+            if is_unencrypted is None:
+                raise SystemExit(f"{ERROR} secret name {secret_name} not found")
+            return not is_unencrypted
+
+        MIMETYPE_PLAIN = "text/plain"
+        MIMETYPE_ENCRYPTED = "application/pgp-encrypted"
+
+        try:
+            result = subprocess.run(
+                ["file", "-b", "--mime-type", secret_fp],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            mime_type = result.stdout.strip()
+            if mime_type == MIMETYPE_ENCRYPTED:
+                return True
+            elif mime_type == MIMETYPE_PLAIN:
+                return False
+            else:
+                raise SystemExit(
+                    f"{ERROR} secret at filepath {secret_fp} has unexpected mime type"
+                )
+        except subprocess.CalledProcessError:
+            raise SystemExit(
+                f"{ERROR} issue calling `file` in subprocess when determining if "
+                f"secret {secret_name} is encrypted"
+            )
 
 
 def from_dict(data: dict[Any, Any], data_class: Type[T]) -> T:
@@ -202,7 +243,12 @@ def from_dict(data: dict[Any, Any], data_class: Type[T]) -> T:
     kwargs = {}
     for field_name, field_type in field_types.items():
         if field_name not in data:
-            raise SystemExit(f"{ERROR} field {field_name} not in lockey config")
+            if isinstance(field_type, Optional[Any]):
+                data[field_name] = None
+            else:
+                raise SystemExit(
+                    f"{ERROR} required field {field_name} not in lockey config"
+                )
 
         if dataclasses.is_dataclass(field_type):
             kwargs[field_name] = from_dict(data[field_name], field_type)
@@ -284,9 +330,7 @@ def execute_init(args: argparse.Namespace) -> None:
         data_path = DEFAULT_DATA_PATH
 
     # Create ~/.lockey and .config/lockey/config.json
-    config = LockeyConfig(
-        data_path=data_path, clipboard_timeout=45, secrets=[], init=True
-    )
+    config = LockeyConfig(data_path=data_path, secrets=[], first_write=True)
     os.mkdir(CONFIG_PATH)
     temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
     config_dict = dataclasses.asdict(config)
@@ -474,43 +518,28 @@ def send_secret_to_clipboard(secret: str) -> None:
     process.communicate(secret.encode("utf-8"))
 
 
-def is_secret_encrypted(secret_name: str) -> bool:
-    # TODO: Make this more robust. Maybe something like
-    # subprocess.Popen(["file", secret_filepath])
-    is_unencrypted = None
-    with get_verified_config("r") as config:
-        for secret in config.secrets:
-            if secret.name == secret_name:
-                is_unencrypted = secret.is_unencrypted
-                break
-    if is_unencrypted is None:
-        raise SystemExit(f"{ERROR} secret name {secret_name} not found")
-    return not is_unencrypted
-
-
 def execute_get(args: argparse.Namespace) -> None:
-    secret_filepath = get_secret_filepath_by_name(args.NAME)
-    if secret_filepath is None:
+    secret_fp = get_secret_filepath_by_name(args.NAME)
+    if secret_fp is None:
         raise SystemExit(f"{ERROR} secret {args.NAME} not found")
 
-    if is_secret_encrypted(args.NAME):
+    with get_verified_config("r") as config:
+        is_secret_encrypted = config.is_secret_encrypted(secret_fp, getfrom="config")
+        timeout = config.clipboard_timeout
+
+    if is_secret_encrypted:
         passphrase = getpass.getpass("passphrase: ")
-        secret = decrypt_secret(secret_filepath, passphrase)
+        secret = decrypt_secret(secret_fp, passphrase)
     else:
-        with open(secret_filepath, "r") as f:
+        with open(secret_fp, "r") as f:
             secret = f.read()
 
     send_secret_to_clipboard(secret)
 
-    with get_verified_config("r") as config:
-        timeout = config.clipboard_timeout
-
     # Get absolute path to where script is installed
     dirpath = os.path.dirname(os.path.realpath(__file__))
     script_filepath = os.path.join(dirpath, "clear_clipboard.sh")
-    subprocess.Popen(
-        ["sh", f"{script_filepath}", f"{timeout}"], stdin=subprocess.PIPE
-    )
+    subprocess.Popen(["sh", f"{script_filepath}", f"{timeout}"], stdin=subprocess.PIPE)
     print(f"{SUCCESS} secret {args.NAME} copied to clipboard for {timeout} seconds.")
 
 
