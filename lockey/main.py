@@ -505,8 +505,11 @@ def execute_get(args: argparse.Namespace) -> None:
     with get_verified_config("r") as config:
         timeout = config.clipboard_timeout
 
+    # Get absolute path to where script is installed
+    dirpath = os.path.dirname(os.path.realpath(__file__))
+    script_filepath = os.path.join(dirpath, "clear_clipboard.sh")
     subprocess.Popen(
-        ["sh", "./clear_clipboard.sh", f"{timeout}"], stdin=subprocess.PIPE
+        ["sh", f"{script_filepath}", f"{timeout}"], stdin=subprocess.PIPE
     )
     print(f"{SUCCESS} secret {args.NAME} copied to clipboard for {timeout} seconds.")
 
