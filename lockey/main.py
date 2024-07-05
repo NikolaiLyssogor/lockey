@@ -100,7 +100,6 @@ def is_sha256_hash(s: str) -> bool:
 
 
 def get_config_metadata(info_type: Literal["filepath", "filename"]) -> str:
-    # TODO: test
     if not os.path.exists(CONFIG_PATH):
         raise SystemExit(f"{ERROR} config directory {CONFIG_PATH} not found")
 
@@ -153,14 +152,13 @@ def get_hash(filepath: str) -> str:
 @dataclasses.dataclass
 class LockeySecret:
     name: str
-    message: str
-    is_unencrypted: Optional[bool]
+    message: str | None
+    is_unencrypted: bool | None
 
 
 @dataclasses.dataclass
 class LockeyConfig:
     data_path: str | os.PathLike[Any]
-    secrets: list[LockeySecret]
     clipboard_timeout: int = 45
     first_write: dataclasses.InitVar[bool] = False
 
@@ -183,55 +181,6 @@ class LockeyConfig:
                     f"{ERROR} invalid config value {self.clipboard_timeout} for "
                     "clipboard timeout"
                 )
-            for secret in self.secrets:
-                secret_fp = os.path.join(self.data_path, secret.name)
-                if not os.path.exists(secret_fp):
-                    raise SystemExit(f"{ERROR} secret path {secret_fp} does not exist")
-                if secret.is_unencrypted is None:
-                    secret.is_unencrypted = not self.is_secret_encrypted(
-                        secret_fp, getfrom="vault"
-                    )
-
-    def is_secret_encrypted(
-        self, secret_fp: str | os.PathLike[Any], getfrom: Literal["config", "vault"]
-    ):
-        _, secret_name = os.path.split(secret_fp)
-
-        if getfrom == "config":
-            is_unencrypted = None
-            for secret in self.secrets:
-                if secret.name == secret_name:
-                    is_unencrypted = secret.is_unencrypted
-                    break
-            if is_unencrypted is None:
-                raise SystemExit(f"{ERROR} secret name {secret_name} not found")
-            return not is_unencrypted
-
-        MIMETYPE_PLAIN = "text/plain"
-        MIMETYPE_ENCRYPTED = "application/pgp-encrypted"
-
-        try:
-            result = subprocess.run(
-                ["file", "-b", "--mime-type", secret_fp],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
-            )
-            mime_type = result.stdout.strip()
-            if mime_type == MIMETYPE_ENCRYPTED:
-                return True
-            elif mime_type == MIMETYPE_PLAIN:
-                return False
-            else:
-                raise SystemExit(
-                    f"{ERROR} secret at filepath {secret_fp} has unexpected mime type"
-                )
-        except subprocess.CalledProcessError:
-            raise SystemExit(
-                f"{ERROR} issue calling `file` in subprocess when determining if "
-                f"secret {secret_name} is encrypted"
-            )
 
 
 def from_dict(data: dict[Any, Any], data_class: Type[T]) -> T:
@@ -305,10 +254,22 @@ def get_verified_config(mode: Literal["r", "w"]) -> Iterator[LockeyConfig]:
             os.rename(config_filepath, new_config_filename)
 
 
-def get_secret_filepath_by_name(
-    name: str, getfrom: Literal["config", "vault"] = "vault"
-) -> str | os.PathLike[Any] | None:
-    # TODO: Make sure this works with unenctyped files
+def get_secrets() -> list[LockeySecret]:
+    with get_verified_config("r") as config:
+        data_path = config.data_path
+
+    secrets: list[LockeySecret] = []
+    for name in os.listdir(data_path):
+        secret_fp = os.path.join(data_path, name)
+        is_unencrypted = not is_secret_encrypted(secret_fp)
+        message = get_xattr("message", secret_fp)
+        secret = LockeySecret(name=name, message=message, is_unencrypted=is_unencrypted)
+        secrets.append(secret)
+
+    return secrets
+
+
+def get_secret_filepath_by_name(name: str) -> str | os.PathLike[Any] | None:
     with get_verified_config("r") as config:
         data_path = config.data_path
 
@@ -318,6 +279,140 @@ def get_secret_filepath_by_name(
             return os.path.join(data_path, filename)
 
     return None
+
+
+def set_xattr(
+    attr_name: str, attr_value: str, filepath: str | os.PathLike[Any]
+) -> None:
+    try:
+        _ = subprocess.run(
+            ["xattr", "-w", attr_name, attr_value, filepath],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        raise SystemExit(
+            f"{WARNING} unable to set xattr {attr_name} for secret {filepath}."
+        )
+
+
+def get_xattr(attr_name: str, filepath: str | os.PathLike[Any]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["xattr", "-p", attr_name, filepath],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError:
+        return None
+    except Exception as e:
+        raise SystemExit(
+            f"{ERROR} an unknown issue occured when getting xattr {attr_name} "
+            f"for {filepath}: {e}"
+        )
+
+
+def encrypt_secret(
+    secret: str, passphrase: str, data_path: str | os.PathLike[Any], name: str
+) -> str | os.PathLike[Any]:
+    output_filepath = os.path.join(data_path, name)
+    try:
+        command = [
+            "gpg",
+            "--output",
+            output_filepath,
+            "--passphrase",
+            passphrase,
+            "--cipher-algo",
+            "AES256",
+            "--batch",
+            "--yes",
+            "--armour",
+            "--no-symkey-cache",
+            "--symmetric",
+        ]
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        _, stderr = process.communicate(secret.encode())
+        if process.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise SystemExit(f"{ERROR} unable to encrypt secret: {error_msg}")
+
+        os.chmod(output_filepath, 0o600)
+        return output_filepath
+    except Exception as e:
+        raise SystemExit(
+            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
+        )
+
+
+def decrypt_secret(secret_filepath: str | os.PathLike[Any], passphrase: str) -> str:
+    try:
+        command = [
+            "gpg",
+            "--batch",
+            "--yes",
+            "--no-symkey-cache",
+            "--passphrase-fd",
+            "0",
+            "--decrypt",
+            secret_filepath,
+        ]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        stdout, _ = process.communicate(passphrase.encode())
+        if process.returncode != 0:
+            raise SystemExit(f"{ERROR} gpg returned a non-zero status code")
+        secret = stdout.decode().strip()
+        return secret
+    except Exception as e:
+        raise SystemExit(
+            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
+        )
+
+
+def is_secret_encrypted(secret_fp: str | os.PathLike[Any]):
+    MIMETYPE_PLAIN = "text/plain"
+    MIMETYPE_ENCRYPTED = "application/pgp-encrypted"
+
+    try:
+        result = subprocess.run(
+            ["file", "-b", "--mime-type", secret_fp],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        mime_type = result.stdout.strip()
+        if mime_type == MIMETYPE_ENCRYPTED:
+            return True
+        elif mime_type == MIMETYPE_PLAIN:
+            return False
+        else:
+            raise SystemExit(
+                f"{ERROR} secret at filepath {secret_fp} has unexpected mime "
+                f"type {mime_type}"
+            )
+    except subprocess.CalledProcessError:
+        _, secret_name = os.path.split(secret_fp)
+        raise SystemExit(
+            f"{ERROR} issue calling `file` in subprocess when determining if "
+            f"secret {secret_name} is encrypted"
+        )
+
+
+def send_secret_to_clipboard(secret: str) -> None:
+    process = subprocess.Popen(
+        "pbcopy", env={"LANG": "en_US.UTF-8"}, stdin=subprocess.PIPE
+    )
+    process.communicate(secret.encode("utf-8"))
 
 
 def execute_init(args: argparse.Namespace) -> None:
@@ -330,7 +425,7 @@ def execute_init(args: argparse.Namespace) -> None:
         data_path = DEFAULT_DATA_PATH
 
     # Create ~/.lockey and .config/lockey/config.json
-    config = LockeyConfig(data_path=data_path, secrets=[], first_write=True)
+    config = LockeyConfig(data_path=data_path, first_write=True)
     os.mkdir(CONFIG_PATH)
     temp_config_filepath = os.path.join(CONFIG_PATH, "tempname.json")
     config_dict = dataclasses.asdict(config)
@@ -347,9 +442,8 @@ def execute_init(args: argparse.Namespace) -> None:
     print(f"{SUCCESS} initialized secret vault in {data_path}")
 
 
-def execute_ls(args: argparse.Namespace) -> None:
-    with get_verified_config("r") as config:
-        secrets = config.secrets
+def execute_ls() -> None:
+    secrets = get_secrets()
     if not secrets:
         print("no secrets stored")
         return None
@@ -393,41 +487,6 @@ def execute_ls(args: argparse.Namespace) -> None:
                 print(gap + line)
 
 
-def encrypt_secret(
-    secret: str, passphrase: str, data_path: str | os.PathLike[Any], name: str
-) -> str | os.PathLike[Any]:
-    output_filepath = os.path.join(data_path, name)
-    try:
-        command = [
-            "gpg",
-            "--output",
-            output_filepath,
-            "--passphrase",
-            passphrase,
-            "--cipher-algo",
-            "AES256",
-            "--batch",
-            "--yes",
-            "--armour",
-            "--no-symkey-cache",
-            "--symmetric",
-        ]
-        process = subprocess.Popen(
-            command, stdin=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        _, stderr = process.communicate(secret.encode())
-        if process.returncode != 0:
-            error_msg = stderr.decode().strip()
-            raise SystemExit(f"{ERROR} unable to encrypt secret: {error_msg}")
-        else:
-            os.chmod(output_filepath, 0o600)
-            return output_filepath
-    except Exception as e:
-        raise SystemExit(
-            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
-        )
-
-
 def execute_add(args: argparse.Namespace) -> None:
     # Make sure name is valid
     pattern = re.compile(r"^[a-zA-Z0-9\-_@.]+$")
@@ -440,17 +499,12 @@ def execute_add(args: argparse.Namespace) -> None:
     # Make sure secret with this name is not in config file or .lockey
     if get_secret_filepath_by_name(args.NAME) is not None:
         raise SystemExit(
-            f"{ERROR} found existing secret in vault with base name {args.NAME}"
+            f"{ERROR} found existing secret in vault with base name {args.NAME}."
+            "Please use another name."
         )
 
     with get_verified_config("r") as config:
         data_path = config.data_path
-        secrets = config.secrets
-
-    if any(s.name == args.NAME for s in secrets):
-        raise SystemExit(
-            f"{ERROR} name {args.NAME} already present in lockey's config file"
-        )
 
     if args.PLAIN:
         secret = input("secret: ")
@@ -467,12 +521,8 @@ def execute_add(args: argparse.Namespace) -> None:
             secret=secret, passphrase=passphrase, data_path=data_path, name=args.NAME
         )
 
-    # Add information to config
-    with get_verified_config("w") as config:
-        new_secret = LockeySecret(
-            name=args.NAME, message=args.MSG, is_unencrypted=args.PLAIN
-        )
-        config.secrets.append(new_secret)
+    set_xattr(attr_name="message", attr_value=args.MSG, filepath=output_filepath)
+
     if args.PLAIN:
         print(
             f"{WARNING} secret stored as plaintext in {output_filepath} "
@@ -482,52 +532,16 @@ def execute_add(args: argparse.Namespace) -> None:
         print(f"{SUCCESS} secret encrypted in {output_filepath}")
 
 
-def decrypt_secret(secret_filepath: str | os.PathLike[Any], passphrase: str) -> str:
-    try:
-        command = [
-            "gpg",
-            "--batch",
-            "--yes",
-            "--no-symkey-cache",
-            "--passphrase-fd",
-            "0",
-            "--decrypt",
-            secret_filepath,
-        ]
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        stdout, _ = process.communicate(passphrase.encode())
-        if process.returncode != 0:
-            raise SystemExit(f"{ERROR} gpg returned a non-zero status code")
-        secret = stdout.decode().strip()
-        return secret
-    except Exception as e:
-        raise SystemExit(
-            f"{ERROR} an unknown issue occured while encrypting the secret: {str(e)}"
-        )
-
-
-def send_secret_to_clipboard(secret: str) -> None:
-    process = subprocess.Popen(
-        "pbcopy", env={"LANG": "en_US.UTF-8"}, stdin=subprocess.PIPE
-    )
-    process.communicate(secret.encode("utf-8"))
-
-
 def execute_get(args: argparse.Namespace) -> None:
-    secret_fp = get_secret_filepath_by_name(args.NAME)
-    if secret_fp is None:
-        raise SystemExit(f"{ERROR} secret {args.NAME} not found")
-
     with get_verified_config("r") as config:
-        is_secret_encrypted = config.is_secret_encrypted(secret_fp, getfrom="config")
+        data_path = config.data_path
         timeout = config.clipboard_timeout
 
-    if is_secret_encrypted:
+    secret_fp = os.path.join(data_path, args.NAME)
+    if not os.path.exists(secret_fp):
+        raise SystemExit(f"{ERROR} secret {args.NAME} not found")
+
+    if is_secret_encrypted(secret_fp):
         passphrase = getpass.getpass("passphrase: ")
         secret = decrypt_secret(secret_fp, passphrase)
     else:
@@ -544,25 +558,13 @@ def execute_get(args: argparse.Namespace) -> None:
 
 
 def execute_rm(args: argparse.Namespace) -> None:
-    secret_filepath = get_secret_filepath_by_name(args.NAME, getfrom="vault")
-    in_vault = secret_filepath is not None
     with get_verified_config("r") as config:
-        in_config = any(args.NAME == s.name for s in config.secrets)
-
-    if not in_config and not in_vault:
-        raise SystemExit(f"{ERROR} name {args.NAME} not found in config or vault")
-
-    if in_config:
-        with get_verified_config("w") as config:
-            config.secrets = [s for s in config.secrets if s.name != args.NAME]
-            print(f"{SUCCESS} entry for {args.NAME} deleted from config file")
-    else:
-        print(f"{WARNING} entry for {args.NAME} not found in config file")
-    if in_vault:
-        os.remove(secret_filepath)
-        print(f"{SUCCESS} entry for {args.NAME} deleted from vault")
-    else:
-        print(f"{WARNING} entry for {args.NAME} not found in vault")
+        data_path = config.data_path
+    secret_fp = os.path.join(data_path, args.NAME)
+    if not os.path.exists(secret_fp):
+        raise SystemExit(f"{ERROR} secret {secret_fp} not found")
+    os.remove(secret_fp)
+    print(f"{SUCCESS} secret {args.NAME} removed from vault")
 
 
 def execute_destroy(args: argparse.Namespace) -> None:
@@ -742,7 +744,7 @@ def main():
     elif args.command == "get":
         execute_get(args)
     elif args.command == "ls":
-        execute_ls(args)
+        execute_ls()
     elif args.command == "rm":
         execute_rm(args)
     elif args.command == "destroy":
