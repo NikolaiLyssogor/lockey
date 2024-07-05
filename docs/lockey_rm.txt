@@ -1,0 +1,8 @@
+usage: lockey rm [-h] -n NAME
+
+Delete a password from lockey's vault.
+
+options:
+  -h, --help            show this help message and exit
+  -n NAME, --name NAME  the name of the secret to delete as displayed in
+                        `lockey ls`

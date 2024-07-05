@@ -1,0 +1,7 @@
+usage: lockey get [-h] -n NAME
+
+Get a secret from the vault and copy it to your clipboard.
+
+options:
+  -h, --help            show this help message and exit
+  -n NAME, --name NAME  the name used to encrypt the secret with `lockey add`

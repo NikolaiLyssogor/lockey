@@ -1,0 +1,16 @@
+usage: lockey [-h] [-v] {init,add,get,ls,rm,destroy} ...
+
+A simple CLI password manager written in Python based on gpg.
+
+positional arguments:
+  {init,add,get,ls,rm,destroy}
+    init                create directories where lockey stores data
+    add                 add a new password to the vault
+    get                 decrypt a secret
+    ls                  list the passwords you currently have saved
+    rm                  delete a password from the vault
+    destroy             delete all lockey data
+
+options:
+  -h, --help            show this help message and exit
+  -v, --version         print the version and exit
