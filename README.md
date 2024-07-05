@@ -26,5 +26,6 @@ compinit
 ```
 
 ## FAQ
-*Q:* Why wouldn't I just use <other CLI password manager>?
-*A:* If some other more popular tool does what you want it to, I would actually recommend using that over lockey. Other tools that have been around longer are probably going to be more stable than lockey is. I made lockey because it's something I can tailor to my workflow as needed.
+**Q:** Why wouldn't I just use `<other CLI password manager>`?
+
+**A:** If some other more popular tool does what you want it to, I would actually recommend using that over lockey. Other tools that have been around longer are probably going to be more stable than lockey is. I made lockey because it's something I can tailor to my workflow as needed.
