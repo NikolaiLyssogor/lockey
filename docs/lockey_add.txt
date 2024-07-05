@@ -1,0 +1,15 @@
+usage: lockey add [-h] -n NAME [-m MSG] [-p]
+
+Add a new password to the vault. Optionally specify a description that will
+get displayed with `lockey ls`.
+
+options:
+  -h, --help            show this help message and exit
+  -n NAME, --name NAME  the name with which you can reference the secret with
+                        `lockey get`
+  -m MSG, --message MSG
+                        a description for the password (must be in double
+                        quotes)
+  -p, --plaintext       whether or not to encrypt the secret. unencrypted
+                        secrets are stored in plain text and do not require a
+                        passphrase to retrieve

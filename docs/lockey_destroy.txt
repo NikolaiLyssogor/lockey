@@ -1,0 +1,8 @@
+usage: lockey destroy [-h] [-y]
+
+Delete all passwords from lockey's vault and the directory
+`$HOME/.config.lockey`.
+
+options:
+  -h, --help  show this help message and exit
+  -y, --yes   assume yes to prompts and run non-interactively

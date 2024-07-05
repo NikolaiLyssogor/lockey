@@ -1,0 +1,7 @@
+usage: lockey ls [-h]
+
+List all of the passwords saved in lockey's vault along with their description
+if they exist.
+
+options:
+  -h, --help  show this help message and exit

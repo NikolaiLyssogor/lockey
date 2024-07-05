@@ -1,0 +1,10 @@
+usage: lockey init [-h] [-f PATH]
+
+Initialize the lockey vault in the location specified by the `--file` argument
+or in the default location of `$HOME/.lockey/`. Also initializes lockey's
+config file at `$HOME/.config/lockey/`. This command should only be run once
+when lockey is first installed.
+
+options:
+  -h, --help            show this help message and exit
+  -f PATH, --file PATH  path to the directory in which to store passwords

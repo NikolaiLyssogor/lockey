@@ -595,7 +595,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lockey",
         description=(
-            "A simple dependency-free password manager written in Python based on gpg."
+            "A simple CLI password manager written in Python based on gpg."
         ),
     )
     parser.add_argument(
@@ -610,18 +610,19 @@ def get_parser() -> argparse.ArgumentParser:
     # init subcommand
     parser_init = subparsers.add_parser(
         name="init",
-        help="initialize a lockey vault in a new location",
+        help="create directories where lockey stores data",
         description=(
-            "Initialize the lockey vault in the location specified with the --dir flag "
-            "or in the default location of $HOME/.lockey/. Also initializes lockey's "
-            "config file at $HOME/.config/lockey/"
+            "Initialize the lockey vault in the location specified by the `--file` "
+            "argument or in the default location of `$HOME/.lockey/`. Also initializes "
+            "lockey's config file at `$HOME/.config/lockey/`. This command should only "
+            "be run once when lockey is first installed."
         ),
     )
     parser_init.add_argument(
         "-f",
         "--file",
         required=False,
-        help="the path in which to store passwords",
+        help="path to the directory in which to store passwords",
         default=DEFAULT_DATA_PATH,
         dest="PATH",
     )
@@ -692,8 +693,7 @@ def get_parser() -> argparse.ArgumentParser:
         name="rm",
         help="delete a password from the vault",
         description=(
-            "Delete paswords from lockey's vault and their metadata in "
-            "lockeyconfig.json."
+            "Delete a password from lockey's vault."
         ),
     )
     parser_init.add_argument(
@@ -711,8 +711,8 @@ def get_parser() -> argparse.ArgumentParser:
         name="destroy",
         help="delete all lockey data",
         description=(
-            "Delete all paswords from lockey's vault and their metadata in "
-            "lockeyconfig.json. Opposite of `lockey init`."
+            "Delete all passwords from lockey's vault and the directory "
+            "`$HOME/.config.lockey`."
         ),
     )
     parser_init.add_argument(
